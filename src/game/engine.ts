@@ -7,6 +7,7 @@ import {
   COMBAT,
   CONTROLS,
   OVERHEAT,
+  PERK_MAX_RANKS,
   PHYSICS,
   STORAGE_KEYS,
   TRANSITION,
@@ -367,9 +368,10 @@ export class GameEngine {
   }
 
   private applyPerk(perkId: PerkId): void {
-    this.player.perks[perkId] = (this.player.perks[perkId] ?? 0) + 1;
+    const cap = PERK_MAX_RANKS[perkId];
+    this.player.perks[perkId] = Math.min(cap, (this.player.perks[perkId] ?? 0) + 1);
     if (perkId === 'max_shield') {
-      this.player.maxShield += 1;
+      this.player.maxShield = Math.min(COMBAT.HARD_MAX_SHIELD, this.player.maxShield + 1);
       this.player.shield = this.player.maxShield;
     }
   }
@@ -377,7 +379,7 @@ export class GameEngine {
   // ---- Input State Machine ----
 
   private getMaxFocusDuration(): number {
-    return CONTROLS.AIM_MAX_DURATION_SEC + this.player.perks.longer_focus * 0.6;
+    return CONTROLS.AIM_MAX_DURATION_SEC + this.player.perks.longer_focus * 0.4;
   }
 
   private getMaxLaunchSpeed(): number {
@@ -495,10 +497,9 @@ export class GameEngine {
     this.player.vy = 0;
     this.player.armored = false;
 
-    // Optional perk: Bullet-Clear Shockwave on Brake
-    if (this.player.perks.brake_shockwave > 0) {
-      const shockRadius =
-        COMBAT.BRAKE_SHOCKWAVE_RADIUS + (this.player.perks.brake_shockwave - 1) * 14;
+    // Optional perk: Bullet-Clear Shockwave on Charged Brake Tap
+    if (this.player.perks.brake_shockwave > 0 && this.player.chargeTier >= 1) {
+      const shockRadius = COMBAT.BRAKE_SHOCKWAVE_RADIUS;
       this.rings.push({
         x: this.player.x,
         y: this.player.y,
@@ -834,7 +835,7 @@ export class GameEngine {
         }
         if (!hit) {
           for (const h of this.hazards) {
-            if (h.triggered) continue;
+            if (h.triggered || h.kind !== 'barrel') continue;
             if (len(h.x - pr.x, h.y - pr.y) <= h.radius + pr.radius) {
               this.hitHazard(h, pr.x, pr.y);
               hit = true;
@@ -883,8 +884,30 @@ export class GameEngine {
       switch (e.kind) {
         case 'slime': {
           e.stateTimer += dt;
-          const desiredVx = toPlayer.x * 34;
-          const desiredVy = toPlayer.y * 34;
+          let moveSpeed = 34;
+          if (e.canShoot) {
+            e.fireTimer = (e.fireTimer ?? 2.0) - dt;
+            if (e.fireTimer <= 0.45) {
+              moveSpeed = 12;
+            }
+            if (e.fireTimer <= 0) {
+              const aimAngle = Math.atan2(p.y - e.y, p.x - e.x);
+              this.spawnEnemyBullet(e.x, e.y, aimAngle, 115, e.radius + 2, 3.2);
+              this.spawnSparks(
+                e.x + Math.cos(aimAngle) * e.radius,
+                e.y + Math.sin(aimAngle) * e.radius,
+                Math.cos(aimAngle),
+                Math.sin(aimAngle),
+                COLORS.bulletRed,
+                4,
+                30,
+                75,
+              );
+              e.fireTimer = 2.4 + Math.random() * 0.8;
+            }
+          }
+          const desiredVx = toPlayer.x * moveSpeed;
+          const desiredVy = toPlayer.y * moveSpeed;
           e.vx += (desiredVx - e.vx) * Math.min(1, dt * PHYSICS.ENEMY_KNOCKBACK_DRAG);
           e.vy += (desiredVy - e.vy) * Math.min(1, dt * PHYSICS.ENEMY_KNOCKBACK_DRAG);
           break;
@@ -897,6 +920,12 @@ export class GameEngine {
           } else if (e.spikeState === 'telegraph' && e.stateTimer <= 0) {
             e.spikeState = 'spiked';
             e.stateTimer = 1.25;
+            const parity = (e.spikePhaseParity ?? 0) % 2;
+            const baseOffset = parity === 0 ? 0 : Math.PI / 4;
+            for (let k = 0; k < 4; k++) {
+              this.spawnEnemyBullet(e.x, e.y, baseOffset + (k * Math.PI) / 2, 122, e.radius + 2, 3.2);
+            }
+            e.spikePhaseParity = (parity + 1) % 2;
           } else if (e.spikeState === 'spiked' && e.stateTimer <= 0) {
             e.spikeState = 'calm';
             e.stateTimer = 1.85;
@@ -912,67 +941,145 @@ export class GameEngine {
           e.stateTimer -= dt;
           const targetAngle = Math.atan2(p.y - e.y, p.x - e.x);
 
+          if ((e.burstRemaining ?? 0) > 0) {
+            e.burstCooldown = (e.burstCooldown ?? 0) - dt;
+            if (e.burstCooldown <= 0) {
+              const bx = Math.cos(e.angle);
+              const by = Math.sin(e.angle);
+              this.spawnEnemyBullet(e.x, e.y, e.angle, 255, e.radius + 3, 3.5);
+              this.spawnSparks(e.x + bx * 10, e.y + by * 10, bx, by, COLORS.bulletRed, 4, 40, 90);
+              e.burstRemaining = (e.burstRemaining ?? 1) - 1;
+              e.burstCooldown = 0.14;
+            }
+          }
+
           if (e.sniperState === 'cooldown') {
-            e.angle = this.rotateToward(e.angle, targetAngle, dt * 2.2);
+            e.angle = this.rotateToward(e.angle, targetAngle, dt * 2.4);
             if (e.stateTimer <= 0) {
               e.sniperState = 'tracking';
-              e.stateTimer = 1.15;
+              e.stateTimer = 0.92;
             }
           } else if (e.sniperState === 'tracking') {
-            e.angle = this.rotateToward(e.angle, targetAngle, dt * 1.9);
+            e.angle = this.rotateToward(e.angle, targetAngle, dt * 2.0);
             if (e.stateTimer <= 0) {
               e.sniperState = 'locked';
-              e.stateTimer = 0.42;
+              e.stateTimer = 0.36;
             }
           } else if (e.sniperState === 'locked') {
             if (e.stateTimer <= 0) {
               const bx = Math.cos(e.angle);
               const by = Math.sin(e.angle);
-              this.projectiles.push({
-                id: allocEntityId(),
-                fromPlayer: false,
-                x: e.x + bx * (e.radius + 3),
-                y: e.y + by * (e.radius + 3),
-                vx: bx * 255,
-                vy: by * 255,
-                radius: 3.5,
-                damage: 1,
-                life: 3.0,
-                color: COLORS.bulletRed,
-              });
+              if (e.isFanShot) {
+                const fanRad = (9 * Math.PI) / 180;
+                for (const off of [-fanRad, 0, fanRad]) {
+                  this.spawnEnemyBullet(e.x, e.y, e.angle + off, 245, e.radius + 3, 3.5);
+                }
+              } else {
+                this.spawnEnemyBullet(e.x, e.y, e.angle, 255, e.radius + 3, 3.5);
+                e.burstRemaining = 1;
+                e.burstCooldown = 0.14;
+              }
               this.spawnSparks(e.x + bx * 10, e.y + by * 10, bx, by, COLORS.bulletRed, 5, 40, 100);
               e.sniperState = 'cooldown';
-              e.stateTimer = 1.4;
+              e.stateTimer = 1.05;
             }
           }
           break;
         }
         case 'bomb_bot': {
-          e.vx += (toPlayer.x * 42 - e.vx) * Math.min(1, dt * PHYSICS.ENEMY_KNOCKBACK_DRAG);
-          e.vy += (toPlayer.y * 42 - e.vy) * Math.min(1, dt * PHYSICS.ENEMY_KNOCKBACK_DRAG);
+          const distToPlayer = len(p.x - e.x, p.y - e.y);
+          e.stateTimer = clamp((distToPlayer - 30) / 80, 0.2, 2.5);
+          e.vx += (toPlayer.x * 46 - e.vx) * Math.min(1, dt * PHYSICS.ENEMY_KNOCKBACK_DRAG);
+          e.vy += (toPlayer.y * 46 - e.vy) * Math.min(1, dt * PHYSICS.ENEMY_KNOCKBACK_DRAG);
+          break;
+        }
+        case 'drone': {
+          e.stateTimer += dt;
+          e.angle += dt * 1.35;
+          const anchorX = 135 + Math.sin(e.stateTimer * 0.95 + e.id) * 65;
+          const anchorY = 140 + Math.cos(e.stateTimer * 0.7 + e.id) * 45;
+          const toAnchor = normalizeOr(anchorX - e.x, anchorY - e.y, 0, 0);
+          const anchorDist = len(anchorX - e.x, anchorY - e.y);
+          const moveSpeed = anchorDist > 5 ? 32 : 0;
+          e.vx += (toAnchor.x * moveSpeed - e.vx) * Math.min(1, dt * 3.5);
+          e.vy += (toAnchor.y * moveSpeed - e.vy) * Math.min(1, dt * 3.5);
+
+          e.fireTimer = (e.fireTimer ?? 1.5) - dt;
+          if (e.fireTimer <= 0) {
+            for (let k = 0; k < 5; k++) {
+              this.spawnEnemyBullet(e.x, e.y, e.angle + (k * Math.PI * 2) / 5, 118, e.radius + 2, 3.2);
+            }
+            this.rings.push({
+              x: e.x,
+              y: e.y,
+              radius: e.radius,
+              maxRadius: e.radius + 14,
+              color: COLORS.drone,
+              life: 0.2,
+              maxLife: 0.2,
+            });
+            e.fireTimer = 1.9 + Math.random() * 0.5;
+          }
           break;
         }
         case 'boss': {
+          const isPhase2 = e.hp <= e.maxHp * 0.5;
           const targetAngle = Math.atan2(p.y - e.y, p.x - e.x);
-          e.angle = this.rotateToward(e.angle, targetAngle, dt * 0.92);
+          e.angle = this.rotateToward(e.angle, targetAngle, dt * (isPhase2 ? 1.05 : 0.92));
 
           // Drift gently in upper/mid arena
           const anchorX = 135 + Math.sin(this.roomTimer * 0.7) * 52;
           const anchorY = 145 + Math.cos(this.roomTimer * 0.5) * 28;
           const toAnchor = normalizeOr(anchorX - e.x, anchorY - e.y, 0, 0);
           const anchorDist = len(anchorX - e.x, anchorY - e.y);
-          const moveSpeed = anchorDist > 6 ? 24 : 0;
+          const moveSpeed = anchorDist > 6 ? 26 : 0;
           e.vx += (toAnchor.x * moveSpeed - e.vx) * Math.min(1, dt * 3.5);
           e.vy += (toAnchor.y * moveSpeed - e.vy) * Math.min(1, dt * 3.5);
 
+          if ((e.burstRemaining ?? 0) > 0) {
+            e.burstCooldown = (e.burstCooldown ?? 0) - dt;
+            if (e.burstCooldown <= 0) {
+              const pat = e.bossPattern ?? 0;
+              if (pat === 0) {
+                this.fireBossRadialBurst(e, 0.26);
+              } else if (pat === 2) {
+                const aim = e.telegraphAngle ?? Math.atan2(p.y - e.y, p.x - e.x);
+                this.spawnEnemyBullet(e.x, e.y, aim, 185, e.radius + 2, 3.5);
+              }
+              e.burstRemaining = (e.burstRemaining ?? 1) - 1;
+              e.burstCooldown = pat === 2 ? 0.16 : 0.34;
+            }
+          }
+
           e.stateTimer -= dt;
           if (e.bossPhase === 0 && e.stateTimer <= 0) {
-            e.bossPhase = 1; // Telegraph radial burst
-            e.stateTimer = 0.7;
+            const patternCount = isPhase2 ? 3 : 2;
+            const nextPat = ((e.bossPattern ?? 0) + 1) % patternCount;
+            e.bossPattern = nextPat;
+            e.telegraphAngle = Math.atan2(p.y - e.y, p.x - e.x);
+            e.bossPhase = 1; // Telegraph active pattern
+            e.stateTimer = isPhase2 ? 0.5 : 0.6;
           } else if (e.bossPhase === 1 && e.stateTimer <= 0) {
-            this.fireBossRadialBurst(e);
+            const pat = e.bossPattern ?? 0;
+            if (pat === 0) {
+              this.fireBossRadialBurst(e, 0);
+              e.burstRemaining = 1;
+              e.burstCooldown = 0.34;
+            } else if (pat === 1) {
+              const baseAim = e.telegraphAngle ?? Math.atan2(p.y - e.y, p.x - e.x);
+              const fanSpan = (26 * Math.PI) / 180;
+              for (let k = 0; k < 5; k++) {
+                const off = ((k / 4) * 2 - 1) * fanSpan;
+                this.spawnEnemyBullet(e.x, e.y, baseAim + off, 162, e.radius + 2, 3.5);
+              }
+              this.audio.playWeapon('shotgun', 0);
+            } else {
+              this.fireBossRadialBurst(e, 0);
+              e.burstRemaining = 2;
+              e.burstCooldown = 0.16;
+            }
             e.bossPhase = 0;
-            e.stateTimer = 2.45;
+            e.stateTimer = isPhase2 ? 1.65 : 2.15;
           }
           break;
         }
@@ -1072,28 +1179,39 @@ export class GameEngine {
     entity.y = clamp(entity.y, ARENA.top + entity.radius, ARENA.bottom - entity.radius);
   }
 
-  private fireBossRadialBurst(boss: Enemy): void {
+  private spawnEnemyBullet(
+    x: number,
+    y: number,
+    angle: number,
+    speed: number,
+    spawnOffset: number,
+    radius = 3.5,
+  ): void {
+    const bx = Math.cos(angle);
+    const by = Math.sin(angle);
+    this.projectiles.push({
+      id: allocEntityId(),
+      fromPlayer: false,
+      x: x + bx * spawnOffset,
+      y: y + by * spawnOffset,
+      vx: bx * speed,
+      vy: by * speed,
+      radius,
+      damage: 1,
+      life: 3.6,
+      color: COLORS.bulletRed,
+    });
+  }
+
+  private fireBossRadialBurst(boss: Enemy, extraAngleOffset = 0): void {
     const burstIndex = (boss.bossBurstCount ?? 0) + 1;
     boss.bossBurstCount = burstIndex;
-    const count = 8 + Math.floor(this.roomNumber / 5);
-    const offset = (burstIndex % 2) * (Math.PI / count);
+    const count = 9 + Math.floor(this.roomNumber / 5);
+    const offset = extraAngleOffset + (burstIndex % 2) * (Math.PI / count);
 
     for (let i = 0; i < count; i++) {
       const a = offset + (i * Math.PI * 2) / count;
-      const bx = Math.cos(a);
-      const by = Math.sin(a);
-      this.projectiles.push({
-        id: allocEntityId(),
-        fromPlayer: false,
-        x: boss.x + bx * (boss.radius + 2),
-        y: boss.y + by * (boss.radius + 2),
-        vx: bx * 132,
-        vy: by * 132,
-        radius: 3.5,
-        damage: 1,
-        life: 3.6,
-        color: COLORS.bulletRed,
-      });
+      this.spawnEnemyBullet(boss.x, boss.y, a, 132, boss.radius + 2, 3.5);
     }
     this.rings.push({
       x: boss.x,
@@ -1218,6 +1336,13 @@ export class GameEngine {
     if (pDist <= radius + this.player.radius && (hurtsPlayerArmored || !this.player.armored)) {
       const away = normalizeOr(this.player.x - x, this.player.y - y, 0, 1);
       this.damagePlayer(1, away.x, away.y);
+    }
+
+    // Bomb Bot detonations release 6 radial crimson shrapnel bullets for Matrix dodging
+    if (hurtsPlayerArmored && skipEnemyId !== undefined) {
+      for (let k = 0; k < 6; k++) {
+        this.spawnEnemyBullet(x, y, (k * Math.PI * 2) / 6, 130, 8, 3.2);
+      }
     }
   }
 

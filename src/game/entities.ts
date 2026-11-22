@@ -22,7 +22,7 @@ export type PerkId =
   | 'max_shield'
   | 'bounce_speed';
 
-export type EnemyKind = 'slime' | 'spike_slime' | 'sniper' | 'bomb_bot' | 'boss';
+export type EnemyKind = 'slime' | 'spike_slime' | 'sniper' | 'bomb_bot' | 'drone' | 'boss';
 
 export type HazardKind = 'barrel' | 'bumper';
 
@@ -88,6 +88,14 @@ export interface Enemy {
   sniperState?: SniperState;
   bossPhase?: number;
   bossBurstCount?: number;
+  bossPattern?: number;
+  canShoot?: boolean;
+  fireTimer?: number;
+  burstRemaining?: number;
+  burstCooldown?: number;
+  telegraphAngle?: number;
+  isFanShot?: boolean;
+  spikePhaseParity?: number;
 }
 
 export interface Hazard {

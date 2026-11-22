@@ -1,6 +1,6 @@
 import './style.css';
 import { registerSW } from 'virtual:pwa-register';
-import { CANVAS_HEIGHT, CANVAS_WIDTH } from './game/constants.ts';
+import { CANVAS_HEIGHT, CANVAS_WIDTH, COMBAT } from './game/constants.ts';
 import { DraftOption, WeaponId } from './game/entities.ts';
 import { GameEngine, GamePhase, RunSummary } from './game/engine.ts';
 import { WEAPON_META } from './game/weapons.ts';
@@ -182,7 +182,7 @@ function renderDraftOverlay(): string {
     : `ROOM ${latestDraftRoom} CLEARED`;
   const sub = isTransfer
     ? `UPGRADE ${WEAPON_META[latestTransferWeapon!].name.toUpperCase()}`
-    : `SHIELD RESTORED // DRAFT 1 UPGRADE (${engine.player.weaponUpgradeBudget}/4 MODS)`;
+    : `SHIELD RESTORED // DRAFT 1 UPGRADE (${engine.player.weaponUpgradeBudget}/${COMBAT.MAX_WEAPON_UPGRADES} MODS)`;
 
   return `
     <div class="overlay-backdrop">

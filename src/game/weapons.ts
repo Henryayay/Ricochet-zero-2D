@@ -60,27 +60,27 @@ export const WEAPON_MOD_META: Record<
   rail_beams: {
     weapon: 'railgun',
     title: 'Split Prism',
-    description: '+1 angled laser beam per shot.',
+    description: 'Fires 2 narrow angled laser beams.',
   },
   rail_width: {
     weapon: 'railgun',
     title: 'Overcharged Bore',
-    description: '+2.5px beam width and +1 laser damage.',
+    description: '+2px laser width and +1 beam damage.',
   },
   rail_bounce: {
     weapon: 'railgun',
     title: 'Mirror Lens',
-    description: 'Laser beam reflects +1 time off arena walls.',
+    description: 'Laser beam reflects 1 time off arena walls.',
   },
   shot_pellets: {
     weapon: 'shotgun',
     title: 'Buckshot Drum',
-    description: '+3 pellets per blast with denser spread.',
+    description: '+2 pellets per blast with tighter choke.',
   },
   shot_bounce: {
     weapon: 'shotgun',
     title: 'Rubber Slugs',
-    description: 'Pellets bounce +1 time off walls and fly farther.',
+    description: 'Pellets bounce 1 time off arena walls.',
   },
   shot_caliber: {
     weapon: 'shotgun',
@@ -90,32 +90,32 @@ export const WEAPON_MOD_META: Record<
   saw_count: {
     weapon: 'sawblade',
     title: 'Twin Blades',
-    description: 'Launches +1 extra spinning sawblade.',
+    description: 'Launches 2 tight spinning sawblades.',
   },
   saw_bounce: {
     weapon: 'sawblade',
     title: 'Perpetual Edge',
-    description: '+2 wall bounces and +12% blade speed.',
+    description: '+1 wall bounce and +12% blade speed.',
   },
   saw_size: {
     weapon: 'sawblade',
     title: 'Giant Buzzsaw',
-    description: '+2.5px blade radius and +1 slice damage.',
+    description: '+2px blade radius and +1 slice damage.',
   },
   arc_jumps: {
     weapon: 'arccoil',
     title: 'Tesla Relay',
-    description: '+2 lightning chain jumps and +20px chain reach.',
+    description: '+1 lightning chain jump and +18px chain reach.',
   },
   arc_fork: {
     weapon: 'arccoil',
     title: 'Dual Emitter',
-    description: 'Fires +1 extra forward lightning arc.',
+    description: 'Fires 2 forward lightning arcs.',
   },
   arc_overload: {
     weapon: 'arccoil',
     title: 'High Voltage',
-    description: '+1 shock damage and +24px forward range.',
+    description: '+1 shock damage and +18px forward range.',
   },
 };
 
@@ -243,8 +243,8 @@ function fireRailgun(
   const widthRank = getModRank(player, 'rail_width');
   const bounceRank = getModRank(player, 'rail_bounce');
 
-  const beamOffsets = getSpreadOffsetsDeg(beamsRank, 5, 6.5);
-  const width = 2 + tier * 1.5 + widthRank * 2.5;
+  const beamOffsets = getSpreadOffsetsDeg(beamsRank, 3.5, 3.5);
+  const width = 2 + tier * 1.5 + widthRank * 2;
   const dmg = 2 + tier * 2 + widthRank;
   const repeatHitDmg = Math.max(1, Math.floor(dmg * 0.4));
   const hitstop =
@@ -373,13 +373,13 @@ function fireShotgun(
   const shotBounceRank = getModRank(player, 'shot_bounce');
   const caliberRank = getModRank(player, 'shot_caliber');
 
-  const pelletCount = 5 + tier * 2 + pelletsRank * 3;
-  const totalSpread = ((36 - pelletsRank * 2) * Math.PI) / 180;
+  const pelletCount = 4 + tier + pelletsRank * 2;
+  const totalSpread = ((26 - pelletsRank * 4) * Math.PI) / 180;
   const baseAngle = Math.atan2(dy, dx);
   const dmg = 1 + (tier >= 3 ? 1 : 0) + caliberRank;
   const knockback = 185 + tier * 30 + caliberRank * 45;
   const speed = 390;
-  const life = 0.25 + shotBounceRank * 0.16;
+  const life = 0.25 + shotBounceRank * 0.14;
   const color = COLORS.playerBullet;
   const spawnOffset = player.radius + 3;
 
@@ -439,11 +439,11 @@ function fireSawblade(
   const bounceRank = getModRank(player, 'saw_bounce');
   const sizeRank = getModRank(player, 'saw_size');
 
-  const bladeOffsets = getSpreadOffsetsDeg(countRank, 11, 14);
+  const bladeOffsets = getSpreadOffsetsDeg(countRank, 8, 8);
   const speed = (340 + tier * 30) * (1 + bounceRank * 0.12);
-  const bouncesLeft = 2 + tier + bounceRank * 2;
+  const bouncesLeft = 2 + tier + bounceRank;
   const damage = 2 + tier + sizeRank;
-  const radius = 7 + (tier >= 2 ? 1 : 0) + sizeRank * 2.5;
+  const radius = 7 + (tier >= 2 ? 1 : 0) + sizeRank * 2;
   const color = COLORS.playerBullet;
 
   for (const offsetRad of bladeOffsets) {
@@ -497,6 +497,7 @@ function pickForwardArcTarget(
   const { player } = ctx;
   let bestEnemy: Enemy | null = null;
   let bestEnemyDist = Infinity;
+  let bestEnemyScore = Infinity;
 
   for (const enemy of ctx.enemies) {
     if (enemy.hp <= 0) continue;
@@ -507,10 +508,13 @@ function pickForwardArcTarget(
     if (dist > range + enemy.radius) continue;
 
     const forwardDot = dist < 1e-3 ? 1 : (ox * dx + oy * dy) / dist;
-    const pointBlank = dist <= player.radius + enemy.radius + 14;
-    if (!pointBlank && forwardDot < 0.2) continue;
+    const pointBlank = dist <= player.radius + enemy.radius + 10;
+    if (!pointBlank && forwardDot < 0.64) continue;
 
-    if (dist < bestEnemyDist) {
+    // Prefer targets well-aligned along the nose chevron (skill-based aiming)
+    const alignScore = dist * (1.35 - 0.35 * Math.max(0, forwardDot));
+    if (alignScore < bestEnemyScore) {
+      bestEnemyScore = alignScore;
       bestEnemyDist = dist;
       bestEnemy = enemy;
     }
@@ -518,6 +522,7 @@ function pickForwardArcTarget(
 
   let bestHazard: Hazard | null = null;
   let bestHazardDist = Infinity;
+  let bestHazardScore = Infinity;
   for (const hazard of ctx.hazards) {
     if (hazard.triggered || hazard.kind !== 'barrel') continue;
     if (preferUnclaimed && claimedHazards.has(hazard.id)) continue;
@@ -527,10 +532,12 @@ function pickForwardArcTarget(
     if (dist > range + hazard.radius) continue;
 
     const forwardDot = dist < 1e-3 ? 1 : (ox * dx + oy * dy) / dist;
-    const pointBlank = dist <= player.radius + hazard.radius + 14;
-    if (!pointBlank && forwardDot < 0.2) continue;
+    const pointBlank = dist <= player.radius + hazard.radius + 10;
+    if (!pointBlank && forwardDot < 0.64) continue;
 
-    if (dist < bestHazardDist) {
+    const alignScore = dist * (1.35 - 0.35 * Math.max(0, forwardDot));
+    if (alignScore < bestHazardScore) {
+      bestHazardScore = alignScore;
       bestHazardDist = dist;
       bestHazard = hazard;
     }
@@ -550,9 +557,9 @@ function fireArcCoil(
   const forkRank = getModRank(player, 'arc_fork');
   const overloadRank = getModRank(player, 'arc_overload');
 
-  const range = 104 + tier * 18 + overloadRank * 24;
-  const chainRange = 105 + jumpsRank * 20;
-  const maxJumps = 2 + tier + jumpsRank * 2;
+  const range = 104 + tier * 18 + overloadRank * 18;
+  const chainRange = 105 + jumpsRank * 18;
+  const maxJumps = 2 + tier + jumpsRank;
   const primaryDmg = 2 + tier + overloadRank;
   const chainDmg = 1 + tier + overloadRank;
   const forkCount = 1 + forkRank;
@@ -728,6 +735,10 @@ function fireArcCoil(
       });
 
       hitEnemies.add(nextEnemy.id);
+      const jumpDmg = everHitEnemies.has(nextEnemy.id)
+        ? Math.max(1, Math.floor(chainDmg * 0.5))
+        : chainDmg;
+      everHitEnemies.add(nextEnemy.id);
       anyEnemyHit = true;
       jumpsUsed++;
       const prevX = anchorX;
@@ -737,7 +748,7 @@ function fireArcCoil(
 
       ctx.onDamageEnemy(
         nextEnemy,
-        chainDmg,
+        jumpDmg,
         pushDir.x * kb,
         pushDir.y * kb,
         prevX,

@@ -1,4 +1,4 @@
-import { COMBAT } from './constants';
+import { COMBAT, PERK_MAX_RANKS } from './constants';
 import {
   allocEntityId,
   DraftOption,
@@ -24,15 +24,15 @@ export const PERK_META: Record<PerkId, { title: string; description: string }> =
   },
   brake_shockwave: {
     title: 'Brake Shockwave',
-    description: 'Mid-flight Brake Tap clears nearby bullets.',
+    description: 'Charged Brake Tap clears nearby bullets.',
   },
   longer_focus: {
     title: 'Longer Focus Ring',
-    description: '+0.6s slow-mo aiming window.',
+    description: '+0.4s slow-mo aiming window.',
   },
   max_shield: {
     title: '+1 Max Shield',
-    description: 'Increases max Shield by 1 and restores Shield.',
+    description: '+1 Max Shield (up to 3) and restores Shield.',
   },
   bounce_speed: {
     title: 'Higher Bounce Speed',
@@ -69,7 +69,7 @@ function makeEnemy(kind: EnemyKind, x: number, y: number, roomNumber: number): E
   const tierScale = Math.floor((roomNumber - 1) / 5);
   switch (kind) {
     case 'slime': {
-      const hp = 2 + tierScale;
+      const hp = 3 + tierScale;
       return {
         id: allocEntityId(),
         kind,
@@ -84,10 +84,12 @@ function makeEnemy(kind: EnemyKind, x: number, y: number, roomNumber: number): E
         slammedTimer: 0,
         angle: 0,
         stateTimer: randRange(0.4, 1.1),
+        canShoot: roomNumber >= 2,
+        fireTimer: randRange(1.6, 2.5),
       };
     }
     case 'spike_slime': {
-      const hp = 3 + tierScale;
+      const hp = 4 + tierScale;
       return {
         id: allocEntityId(),
         kind,
@@ -103,10 +105,11 @@ function makeEnemy(kind: EnemyKind, x: number, y: number, roomNumber: number): E
         angle: 0,
         stateTimer: randRange(1.0, 2.2),
         spikeState: 'calm',
+        spikePhaseParity: 0,
       };
     }
     case 'sniper': {
-      const hp = 2 + Math.floor((roomNumber - 1) / 6);
+      const hp = 3 + Math.floor((roomNumber - 1) / 6);
       return {
         id: allocEntityId(),
         kind,
@@ -122,10 +125,13 @@ function makeEnemy(kind: EnemyKind, x: number, y: number, roomNumber: number): E
         angle: Math.PI / 2,
         stateTimer: randRange(0.8, 1.6),
         sniperState: 'cooldown',
+        isFanShot: roomNumber >= 4,
+        burstRemaining: 0,
+        burstCooldown: 0,
       };
     }
     case 'bomb_bot': {
-      const hp = 2 + Math.floor((roomNumber - 1) / 7);
+      const hp = 3 + Math.floor((roomNumber - 1) / 7);
       return {
         id: allocEntityId(),
         kind,
@@ -142,9 +148,28 @@ function makeEnemy(kind: EnemyKind, x: number, y: number, roomNumber: number): E
         stateTimer: randRange(0.9, 1.8),
       };
     }
+    case 'drone': {
+      const hp = 3 + Math.floor((roomNumber - 1) / 6);
+      return {
+        id: allocEntityId(),
+        kind,
+        x,
+        y,
+        vx: 0,
+        vy: 0,
+        radius: 10,
+        hp,
+        maxHp: hp,
+        hitFlash: 0,
+        slammedTimer: 0,
+        angle: Math.random() * Math.PI * 2,
+        stateTimer: randRange(0.9, 1.5),
+        fireTimer: randRange(1.2, 1.9),
+      };
+    }
     case 'boss': {
       const bossTier = Math.floor(roomNumber / 5);
-      const hp = 11 + bossTier * 5;
+      const hp = 14 + bossTier * 6;
       return {
         id: allocEntityId(),
         kind,
@@ -161,6 +186,9 @@ function makeEnemy(kind: EnemyKind, x: number, y: number, roomNumber: number): E
         stateTimer: 1.4,
         bossPhase: 0,
         bossBurstCount: 0,
+        bossPattern: 0,
+        burstRemaining: 0,
+        burstCooldown: 0,
       };
     }
   }
@@ -238,6 +266,7 @@ function pickEnemyKind(
   roomNumber: number,
   sniperCount: number,
   bombCount: number,
+  droneCount: number,
 ): EnemyKind {
   const pool: EnemyKind[] = ['slime', 'slime'];
   if (roomNumber >= 2) {
@@ -245,6 +274,9 @@ function pickEnemyKind(
   }
   if (roomNumber >= 3 && sniperCount < 2) {
     pool.push('sniper');
+  }
+  if (roomNumber >= 3 && droneCount < 2) {
+    pool.push('drone');
   }
   if (roomNumber >= 4 && bombCount < 2) {
     pool.push('bomb_bot');
@@ -319,13 +351,14 @@ export function generateRoom(roomNumber: number): RoomSpawnResult {
   const enemyCount = Math.min(8, 3 + Math.floor(roomNumber * 0.6));
   let sniperCount = 0;
   let bombCount = 0;
+  let droneCount = 0;
 
   // Ensure new enemy types appear reliably when first introduced
   const guaranteed: EnemyKind[] = [];
   if (roomNumber === 2) {
     guaranteed.push('spike_slime', 'slime', 'slime');
   } else if (roomNumber === 3) {
-    guaranteed.push('sniper', 'spike_slime', 'slime');
+    guaranteed.push('sniper', 'drone', 'spike_slime');
   } else if (roomNumber === 4) {
     guaranteed.push('bomb_bot', 'sniper', 'spike_slime');
   }
@@ -334,22 +367,25 @@ export function generateRoom(roomNumber: number): RoomSpawnResult {
     let kind: EnemyKind;
     if (i < guaranteed.length) {
       kind = guaranteed[i];
+    } else if (i === enemyCount - 1 && roomNumber >= 3 && sniperCount === 0 && droneCount === 0) {
+      kind = Math.random() < 0.5 ? 'sniper' : 'drone';
     } else {
-      kind = pickEnemyKind(roomNumber, sniperCount, bombCount);
+      kind = pickEnemyKind(roomNumber, sniperCount, bombCount, droneCount);
     }
 
     if (kind === 'sniper') sniperCount++;
     if (kind === 'bomb_bot') bombCount++;
+    if (kind === 'drone') droneCount++;
 
-    const minY = kind === 'sniper' ? 72 : 85;
-    const maxY = kind === 'sniper' ? 195 : 290;
+    const minY = kind === 'sniper' ? 72 : kind === 'drone' ? 75 : 85;
+    const maxY = kind === 'sniper' ? 195 : kind === 'drone' ? 220 : 290;
     const pos = findSafeSpawnPos(occupied, 11, 35, 235, minY, maxY);
     const enemy = makeEnemy(kind, pos.x, pos.y, roomNumber);
     enemies.push(enemy);
     occupied.push({ x: enemy.x, y: enemy.y, r: enemy.radius });
   }
 
-  const barrelCount = Math.random() < 0.75 ? 1 + (roomNumber >= 6 && Math.random() < 0.45 ? 1 : 0) : 1;
+  const barrelCount = 1 + (roomNumber >= 6 && Math.random() < 0.45 ? 1 : 0);
   const bumperCount = 1 + (Math.random() < 0.55 ? 1 : 0);
 
   for (let i = 0; i < barrelCount; i++) {
@@ -428,6 +464,19 @@ export function generateWeaponTransferOptions(
   return options;
 }
 
+function makeWeaponSwapOption(weaponId: WeaponId, budget: number): DraftOption {
+  const meta = WEAPON_META[weaponId];
+  const transferNote =
+    budget > 0 ? ` Transfers ${budget} weapon upgrade(s) to re-pick!` : '';
+  return {
+    id: `weapon_${weaponId}`,
+    kind: 'weapon',
+    weaponId,
+    title: `Equip: ${meta.name}`,
+    description: `${meta.desc}${transferNote}`,
+  };
+}
+
 export function generateDraftOptions(
   player: PlayerState,
   roomNumber: number,
@@ -437,7 +486,18 @@ export function generateDraftOptions(
   const usedIds = new Set<string>();
   const budget = player.weaponUpgradeBudget ?? 0;
 
-  // Option A: Upgrade current weapon if below cap; otherwise offer a utility perk
+  const eligiblePerks = ALL_PERKS.filter((id) => {
+    const rank = player.perks?.[id] ?? 0;
+    if (rank >= PERK_MAX_RANKS[id]) return false;
+    if (id === 'max_shield' && player.maxShield >= COMBAT.HARD_MAX_SHIELD) {
+      return false;
+    }
+    return true;
+  });
+  const shuffledPerks = shuffled(eligiblePerks);
+  const otherWeapons = shuffled(ALL_WEAPONS.filter((w) => w !== player.weapon));
+
+  // Option A: Upgrade current weapon if below cap; otherwise offer an eligible utility perk
   const upgradeableMods =
     budget < COMBAT.MAX_WEAPON_UPGRADES
       ? WEAPON_MODS_BY_WEAPON[player.weapon].filter(
@@ -450,37 +510,32 @@ export function generateDraftOptions(
     const opt = makeWeaponModOption(pickedMod, player.weaponMods?.[pickedMod] ?? 0);
     options.push(opt);
     usedIds.add(opt.id);
-  } else {
-    const fallbackPerk = shuffled(ALL_PERKS)[0];
-    if (fallbackPerk) {
-      const opt = makePerkOption(fallbackPerk);
-      options.push(opt);
-      usedIds.add(opt.id);
-    }
-  }
-
-  // Option B: Weapon swap to one of the other 3 weapons
-  const otherWeapons = shuffled(ALL_WEAPONS.filter((w) => w !== player.weapon));
-  const pickedWeapon = otherWeapons[0];
-  if (pickedWeapon) {
-    const meta = WEAPON_META[pickedWeapon];
-    const transferNote =
-      budget > 0 ? ` Transfers ${budget} weapon upgrade(s) to re-pick!` : '';
-    const opt: DraftOption = {
-      id: `weapon_${pickedWeapon}`,
-      kind: 'weapon',
-      weaponId: pickedWeapon,
-      title: `Equip: ${meta.name}`,
-      description: `${meta.desc}${transferNote}`,
-    };
+  } else if (shuffledPerks.length > 0) {
+    const opt = makePerkOption(shuffledPerks[0]);
     options.push(opt);
     usedIds.add(opt.id);
   }
 
-  // Option C: Utility perk (ensure distinct IDs and always 3 options)
-  for (const perkId of shuffled(ALL_PERKS)) {
+  // Option B: Weapon swap to one of the other 3 weapons
+  if (otherWeapons.length > 0) {
+    const opt = makeWeaponSwapOption(otherWeapons[0], budget);
+    options.push(opt);
+    usedIds.add(opt.id);
+  }
+
+  // Option C: Eligible utility perk (ensure distinct IDs)
+  for (const perkId of shuffledPerks) {
     if (options.length >= 3) break;
     const opt = makePerkOption(perkId);
+    if (usedIds.has(opt.id)) continue;
+    options.push(opt);
+    usedIds.add(opt.id);
+  }
+
+  // Fallback: if fewer than 3 options remain (e.g. perks/mods maxed), fill with other weapon swaps
+  for (const weaponId of otherWeapons) {
+    if (options.length >= 3) break;
+    const opt = makeWeaponSwapOption(weaponId, budget);
     if (usedIds.has(opt.id)) continue;
     options.push(opt);
     usedIds.add(opt.id);

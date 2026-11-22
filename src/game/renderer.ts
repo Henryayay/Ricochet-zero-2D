@@ -208,6 +208,20 @@ const BOMB_BOT_SPRITE = [
   '...ooooooooo..',
 ] as const;
 
+const DRONE_SPRITE = [
+  '.....o.....',
+  '....oho....',
+  '...ohbho...',
+  '..ohbbbho..',
+  '.ohbcccbho.',
+  'ohbcwwwcbho',
+  '.ohbcccbho.',
+  '..ohbbbho..',
+  '...ohbho...',
+  '....oho....',
+  '.....o.....',
+] as const;
+
 const BARREL_SPRITE = [
   '..oooooooo..',
   '.ohhhhhhhhh.',
@@ -572,7 +586,7 @@ export class GameRenderer {
     // 16. Boss top HP bar (inside arena top)
     for (let i = 0; i < state.enemies.length; i++) {
       if (state.enemies[i].kind === 'boss') {
-        this.drawBossHpBar(ctx, state.enemies[i], entityOffsetY);
+        this.drawBossHpBar(ctx, state.enemies[i], entityOffsetY, state.roomNumber);
         break;
       }
     }
@@ -870,31 +884,38 @@ export class GameRenderer {
 
     const ex = enemy.x;
     const ey = enemy.y + offsetY;
-    const end = raycastToArena(ex, ey, enemy.angle);
     const isLocked = enemy.sniperState === 'locked';
+    const fanOffset = (9 * Math.PI) / 180;
+    const angles = enemy.isFanShot
+      ? [enemy.angle, enemy.angle - fanOffset, enemy.angle + fanOffset]
+      : [enemy.angle];
+    const flash = Math.sin(time * 28) > 0;
 
-    if (isLocked) {
-      const flash = Math.sin(time * 28) > 0;
-      this.drawPixelLine(
-        ctx,
-        ex,
-        ey,
-        end.x,
-        end.y,
-        flash ? '#ff8596' : COLORS.sniperLaser,
-        1,
-      );
-    } else {
-      // Faint dotted red tracking laser
-      const dx = end.x - ex;
-      const dy = end.y - ey;
-      const dist = Math.hypot(dx, dy);
-      if (dist < 1) return;
-      const ux = dx / dist;
-      const uy = dy / dist;
-      ctx.fillStyle = 'rgba(255, 43, 69, 0.55)';
-      for (let d = 8; d < dist; d += 6) {
-        ctx.fillRect(Math.round(ex + ux * d), Math.round(ey + uy * d), 1, 1);
+    for (let i = 0; i < angles.length; i++) {
+      const end = raycastToArena(ex, ey, angles[i]);
+      if (isLocked) {
+        const lineColor =
+          i === 0
+            ? flash
+              ? '#ff8596'
+              : COLORS.sniperLaser
+            : flash
+              ? COLORS.sniperLaser
+              : '#c91c34';
+        this.drawPixelLine(ctx, ex, ey, end.x, end.y, lineColor, 1);
+      } else {
+        // Faint dotted red tracking laser
+        const dx = end.x - ex;
+        const dy = end.y - ey;
+        const dist = Math.hypot(dx, dy);
+        if (dist < 1) continue;
+        const ux = dx / dist;
+        const uy = dy / dist;
+        ctx.fillStyle =
+          i === 0 ? 'rgba(255, 43, 69, 0.55)' : 'rgba(255, 43, 69, 0.3)';
+        for (let d = 8; d < dist; d += 6) {
+          ctx.fillRect(Math.round(ex + ux * d), Math.round(ey + uy * d), 1, 1);
+        }
       }
     }
   }
@@ -932,6 +953,21 @@ export class GameRenderer {
           e: '#07080f',
         };
         this.drawSprite(ctx, SLIME_SPRITE, palette, ex, ey + bobY, 1, flashWhite);
+
+        // Pre-shot mouth/core telegraph when about to spit an orb
+        if (
+          enemy.canShoot &&
+          enemy.fireTimer !== undefined &&
+          enemy.fireTimer <= 0.45
+        ) {
+          const spitBlink = Math.sin(time * 28) > 0;
+          ctx.fillStyle = '#07080f';
+          ctx.fillRect(ex - 2, ey + bobY, 4, 4);
+          ctx.fillStyle = COLORS.bulletRed;
+          ctx.fillRect(ex - 2, ey + bobY + 1, 4, 2);
+          ctx.fillStyle = spitBlink ? '#ffffff' : COLORS.bulletCore;
+          ctx.fillRect(ex - 1, ey + bobY + 1, 2, 2);
+        }
         break;
       }
 
@@ -973,6 +1009,26 @@ export class GameRenderer {
             1,
             flashWhite,
           );
+
+          // 4 directional crimson spike-bolt telegraph pips (+ if even parity, x if odd)
+          const baseAngle =
+            (enemy.spikePhaseParity ?? 0) % 2 === 0 ? 0 : Math.PI / 4;
+          const pipR = Math.round(enemy.radius) + 4;
+          const pipBlink = Math.sin(time * 28) > 0;
+          for (let i = 0; i < 4; i++) {
+            const ang = baseAngle + i * (Math.PI / 2);
+            const cos = Math.cos(ang);
+            const sin = Math.sin(ang);
+            const tx = Math.round(ex + cos * pipR);
+            const ty = Math.round(ey + sin * pipR);
+            const ox = Math.round(ex + cos * (pipR + 2));
+            const oy = Math.round(ey + sin * (pipR + 2));
+            ctx.fillStyle = '#07080f';
+            ctx.fillRect(tx - 1, ty - 1, 3, 3);
+            this.drawPixelLine(ctx, tx, ty, ox, oy, COLORS.bulletRed, 2);
+            ctx.fillStyle = pipBlink ? '#ffffff' : COLORS.bulletCore;
+            ctx.fillRect(tx, ty, 1, 1);
+          }
         } else {
           const palette: SpritePalette = {
             o: '#07080f',
@@ -1079,6 +1135,11 @@ export class GameRenderer {
         break;
       }
 
+      case 'drone': {
+        this.drawDrone(ctx, enemy, time, offsetY);
+        break;
+      }
+
       case 'boss': {
         this.drawBoss(ctx, enemy, time, offsetY);
         break;
@@ -1100,6 +1161,79 @@ export class GameRenderer {
     }
   }
 
+  private drawDrone(
+    ctx: CanvasRenderingContext2D,
+    enemy: Enemy,
+    time: number,
+    offsetY: number,
+  ): void {
+    const ex = Math.round(enemy.x);
+    const ey = Math.round(enemy.y + offsetY);
+    const r = Math.max(6, Math.round(enemy.radius));
+    const flashWhite = enemy.hitFlash > 0;
+    const isTelegraphing =
+      enemy.fireTimer !== undefined && enemy.fireTimer <= 0.5;
+
+    // Pulsing crimson telegraph ring before firing
+    if (isTelegraphing) {
+      const pulse = 0.5 + 0.5 * Math.sin(time * 26);
+      const ringR = r + 3 + (pulse > 0.5 ? 1 : 0);
+      ctx.save();
+      ctx.globalAlpha = 0.65 + 0.35 * pulse;
+      this.drawPixelCircleStroke(
+        ctx,
+        ex,
+        ey,
+        ringR,
+        pulse > 0.75 ? '#ff7084' : COLORS.bulletRed,
+        1,
+      );
+      ctx.restore();
+    }
+
+    // Outer orbital ring with dark outline
+    this.drawPixelCircleStroke(ctx, ex, ey, r + 1, '#07080f', 2);
+    this.drawPixelCircleStroke(
+      ctx,
+      ex,
+      ey,
+      r,
+      flashWhite ? '#ffffff' : isTelegraphing ? COLORS.bulletRed : '#7d1e42',
+      1,
+    );
+
+    // Chunky diamond core sprite
+    const blink = Math.sin(time * 28) > 0;
+    const palette: SpritePalette = {
+      o: '#07080f',
+      b: COLORS.drone,
+      h: '#ff9ebb',
+      d: '#8f1b43',
+      c: isTelegraphing ? COLORS.bulletRed : '#ff2e88',
+      w: isTelegraphing && blink ? '#ffffff' : '#ffe6f0',
+    };
+    this.drawSprite(ctx, DRONE_SPRITE, palette, ex, ey, 1, flashWhite);
+
+    // Rotating orbital emitter pips around enemy.angle
+    for (let i = 0; i < 4; i++) {
+      const pipAngle = enemy.angle + i * (Math.PI / 2);
+      const px = Math.round(ex + Math.cos(pipAngle) * r);
+      const py = Math.round(ey + Math.sin(pipAngle) * r);
+      ctx.fillStyle = '#07080f';
+      ctx.fillRect(px - 2, py - 2, 4, 4);
+      ctx.fillStyle = flashWhite
+        ? '#ffffff'
+        : isTelegraphing
+          ? COLORS.bulletRed
+          : COLORS.drone;
+      ctx.fillRect(px - 1, py - 1, 2, 2);
+      if (isTelegraphing || i === 0) {
+        ctx.fillStyle = isTelegraphing && blink ? '#ffffff' : '#ffd6e6';
+        ctx.fillRect(px, py, 1, 1);
+      }
+    }
+  }
+
   private drawBoss(
     ctx: CanvasRenderingContext2D,
     boss: Enemy,
@@ -1112,6 +1246,48 @@ export class GameRenderer {
     const flashWhite = boss.hitFlash > 0;
     const pulse = 0.5 + 0.5 * Math.sin(time * 9);
     const shieldSpan = COMBAT.BOSS_SHIELD_HALF_ANGLE_RAD;
+
+    // 0. Clear slow-mo readable telegraphs for Boss attacks
+    if (boss.bossPhase === 1) {
+      const pat = boss.bossPattern ?? 0;
+      const flashSoon = boss.stateTimer <= 0.22;
+      if (pat === 1) {
+        // Aimed 5-Way Fan telegraph cone (-26°, 0°, +26° along telegraphAngle)
+        const aimAngle = boss.telegraphAngle ?? boss.angle;
+        const halfCone = (26 * Math.PI) / 180;
+        const conePulse = flashSoon ? 0.92 : 0.52 + 0.28 * Math.sin(time * 22);
+        ctx.save();
+        ctx.globalAlpha = conePulse;
+        ctx.fillStyle = flashSoon ? '#ffffff' : COLORS.bulletRed;
+        for (const offset of [-halfCone, 0, halfCone] as const) {
+          const end = raycastToArena(bx, by, aimAngle + offset);
+          const dx = end.x - bx;
+          const dy = end.y - by;
+          const dist = Math.hypot(dx, dy);
+          if (dist <= r + 5) continue;
+          const ux = dx / dist;
+          const uy = dy / dist;
+          for (let d = r + 5; d < dist; d += 5) {
+            ctx.fillRect(Math.round(bx + ux * d), Math.round(by + uy * d), 2, 2);
+          }
+        }
+        ctx.restore();
+      } else {
+        // Pulsing crimson outer ring telegraph for Spiral / Cross-Ring Barrage
+        const ringPulse = 0.55 + 0.4 * Math.sin(time * 24);
+        ctx.save();
+        ctx.globalAlpha = ringPulse;
+        this.drawPixelCircleStroke(
+          ctx,
+          bx,
+          by,
+          r + 8 + Math.round(pulse * 2),
+          flashSoon ? '#ffffff' : COLORS.bulletRed,
+          1,
+        );
+        ctx.restore();
+      }
+    }
 
     // 1. Wide exposed magenta rear/flank weakspot glow (264-degree unshielded arc)
     const flankStart = boss.angle + shieldSpan + 0.08;
@@ -1202,6 +1378,16 @@ export class GameRenderer {
     ctx.fillRect(bx - rivetOff, by + rivetOff - 2, 2, 2);
     ctx.fillRect(bx + rivetOff - 2, by + rivetOff - 2, 2, 2);
 
+    // Phase 2 subtle pulsing crimson overdrive aura around the Boss core
+    if (boss.hp <= boss.maxHp * 0.5) {
+      const overdrivePulse = 0.5 + 0.5 * Math.sin(time * 16);
+      const auraR = 8 + Math.round(overdrivePulse * 2);
+      ctx.save();
+      ctx.globalAlpha = 0.45 + 0.35 * overdrivePulse;
+      this.drawPixelCircleStroke(ctx, bx, by, auraR, COLORS.bulletRed, 1);
+      ctx.restore();
+    }
+
     // Center reactor eye
     this.drawPixelCircleFill(ctx, bx, by, 6, '#07080f');
     this.drawPixelCircleFill(
@@ -1269,15 +1455,18 @@ export class GameRenderer {
     ctx: CanvasRenderingContext2D,
     boss: Enemy,
     offsetY: number,
+    roomNumber: number,
   ): void {
     const barW = ARENA.width - 36;
     const barX = ARENA.left + 18;
     const barY = ARENA.top + 8 + Math.round(offsetY * 0.2);
     const hpRatio = clamp(boss.hp / Math.max(1, boss.maxHp), 0, 1);
+    const tier = Math.floor(roomNumber / 5);
+    const label = tier > 1 ? `ARMORED CORE MK.${tier}` : 'ARMORED CORE';
 
     this.drawPixelText(
       ctx,
-      'ARMORED CORE',
+      label,
       CANVAS_WIDTH / 2,
       barY - 6,
       COLORS.bossShield,

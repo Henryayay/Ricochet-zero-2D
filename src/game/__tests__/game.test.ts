@@ -6,6 +6,7 @@ import {
   COMBAT,
   CONTROLS,
   OVERHEAT,
+  PERK_MAX_RANKS,
   PHYSICS,
   TRANSITION,
 } from '../constants.ts';
@@ -427,8 +428,8 @@ describe('Ricochet Zero Core Systems', () => {
 
       triggerQuickTap(engine, 135, 300);
 
-      // 5 + tier*2 = 7 pellets moving forward (-Y)
-      expect(engine.projectiles).toHaveLength(7);
+      // 4 + tier = 5 pellets moving forward (-Y)
+      expect(engine.projectiles).toHaveLength(5);
       for (const p of engine.projectiles) {
         expect(p.fromPlayer).toBe(true);
         expect(p.vy).toBeLessThan(0);
@@ -927,11 +928,11 @@ describe('Ricochet Zero Core Systems', () => {
       expect(engine.beams[0].color).toBe(COLORS.playerBullet);
       expect(baseDamage).toBe(2);
 
-      // Now upgrade rail_beams: 2 and rail_width: 2
+      // Now upgrade rail_beams: 1 and rail_width: 1 (MAX_WEAPON_MOD_RANK = 1)
       engine.beams = [];
       baseTarget.hp = 20;
-      engine.player.weaponMods.rail_beams = 2;
-      engine.player.weaponMods.rail_width = 2;
+      engine.player.weaponMods.rail_beams = 1;
+      engine.player.weaponMods.rail_width = 1;
       engine.player.vx = 0;
       engine.player.vy = -260;
       engine.player.aimDirX = 0;
@@ -940,7 +941,7 @@ describe('Ricochet Zero Core Systems', () => {
       engine.player.chargeTier = 0;
 
       triggerQuickTap(engine, 135, 300, 2, 1200, 50);
-      expect(engine.beams).toHaveLength(3);
+      expect(engine.beams).toHaveLength(2);
       for (const beam of engine.beams) {
         expect(beam.color).toBe(COLORS.playerBullet);
         expect(beam.width).toBeGreaterThan(baseWidth);
@@ -997,7 +998,7 @@ describe('Ricochet Zero Core Systems', () => {
       engine.hazards = [];
       engine.enemies = [];
 
-      // Base tier 0: 5 pellets, damage 1
+      // Base tier 0: 4 pellets, damage 1
       engine.player.x = 135;
       engine.player.y = 260;
       engine.player.vx = 0;
@@ -1008,15 +1009,15 @@ describe('Ricochet Zero Core Systems', () => {
       engine.player.chargeTier = 0;
 
       triggerQuickTap(engine, 135, 260, 1, 1000, 50);
-      expect(engine.projectiles).toHaveLength(5);
+      expect(engine.projectiles).toHaveLength(4);
       const baseDmg = engine.projectiles[0].damage;
       expect(baseDmg).toBe(1);
       expect(engine.projectiles.every((pr) => pr.color === COLORS.playerBullet)).toBe(true);
 
-      // Upgrade shot_pellets (+3/rank) & shot_caliber (+1 dmg/rank)
+      // Upgrade shot_pellets (+2/rank) & shot_caliber (+1 dmg/rank), capped at rank 1
       engine.projectiles = [];
       engine.player.weaponMods.shot_pellets = 1;
-      engine.player.weaponMods.shot_caliber = 2;
+      engine.player.weaponMods.shot_caliber = 1;
       engine.player.x = 135;
       engine.player.y = 260;
       engine.player.vx = 0;
@@ -1027,9 +1028,9 @@ describe('Ricochet Zero Core Systems', () => {
       engine.player.chargeTier = 0;
 
       triggerQuickTap(engine, 135, 260, 2, 1200, 50);
-      expect(engine.projectiles).toHaveLength(8);
+      expect(engine.projectiles).toHaveLength(6);
       expect(engine.projectiles[0].damage).toBeGreaterThan(baseDmg);
-      expect(engine.projectiles[0].damage).toBe(3);
+      expect(engine.projectiles[0].damage).toBe(2);
 
       // Upgrade shot_bounce rank 1: bounces once off arena wall (bouncesDone === 1) and despawns on 2nd wall hit
       const bounceEngine = new GameEngine();
@@ -1104,9 +1105,9 @@ describe('Ricochet Zero Core Systems', () => {
       const baseDamage = engine.sawblades[0].damage;
 
       engine.sawblades = [];
-      engine.player.weaponMods.saw_count = 2;
+      engine.player.weaponMods.saw_count = 1;
       engine.player.weaponMods.saw_bounce = 1;
-      engine.player.weaponMods.saw_size = 2;
+      engine.player.weaponMods.saw_size = 1;
       engine.player.vx = 0;
       engine.player.vy = -260;
       engine.player.aimDirX = 0;
@@ -1115,7 +1116,7 @@ describe('Ricochet Zero Core Systems', () => {
       engine.player.chargeTier = 0;
 
       triggerQuickTap(engine, 135, 260, 2, 1200, 50);
-      expect(engine.sawblades).toHaveLength(3);
+      expect(engine.sawblades).toHaveLength(2);
       for (const saw of engine.sawblades) {
         expect(saw.bouncesLeft).toBeGreaterThan(baseBounces);
         expect(saw.radius).toBeGreaterThan(baseRadius);
@@ -1187,19 +1188,19 @@ describe('Ricochet Zero Core Systems', () => {
       expect(20 - baseTargets[2].hp).toBe(0);
       expect(20 - baseTargets[3].hp).toBe(0);
 
-      const upgradedTargets = makeChainLine(1, 2);
-      // arc_jumps rank 1 -> maxJumps = 4; arc_overload rank 2 -> primary=4, chain=3
-      expect(20 - upgradedTargets[0].hp).toBe(4);
-      expect(20 - upgradedTargets[1].hp).toBe(3);
-      expect(20 - upgradedTargets[2].hp).toBe(3);
-      expect(20 - upgradedTargets[3].hp).toBe(3);
+      const upgradedTargets = makeChainLine(1, 1);
+      // arc_jumps rank 1 -> maxJumps = 3; arc_overload rank 1 -> primary=3, chain=2
+      expect(20 - upgradedTargets[0].hp).toBe(3);
+      expect(20 - upgradedTargets[1].hp).toBe(2);
+      expect(20 - upgradedTargets[2].hp).toBe(2);
+      expect(20 - upgradedTargets[3].hp).toBe(0);
     });
 
-    it('enforces COMBAT.MAX_WEAPON_UPGRADES = 4 in generateDraftOptions', () => {
-      expect(COMBAT.MAX_WEAPON_UPGRADES).toBe(4);
+    it('enforces COMBAT.MAX_WEAPON_UPGRADES = 2 in generateDraftOptions', () => {
+      expect(COMBAT.MAX_WEAPON_UPGRADES).toBe(2);
       const engine = new GameEngine();
       engine.startNewRun('railgun');
-      engine.player.weaponUpgradeBudget = 4;
+      engine.player.weaponUpgradeBudget = 2;
 
       for (let i = 0; i < 20; i++) {
         const options = generateDraftOptions(engine.player, 2);
@@ -1277,6 +1278,422 @@ describe('Ricochet Zero Core Systems', () => {
       expect(engine.player.weaponUpgradeBudget).toBe(2);
       expect(engine.player.weaponMods.shot_pellets).toBe(1);
       expect(engine.player.weaponMods.shot_bounce).toBe(1);
+    });
+  });
+
+  describe('11. Rebalance Caps & Expanded Enemy/Boss Bullet Patterns', () => {
+    it('caps max_shield perk at HARD_MAX_SHIELD = 3 and removes it from draft pool once capped', () => {
+      expect(COMBAT.HARD_MAX_SHIELD).toBe(3);
+      expect(PERK_MAX_RANKS.max_shield).toBe(2);
+
+      const engine = new GameEngine();
+      engine.startNewRun('railgun');
+      expect(engine.player.maxShield).toBe(1);
+
+      const shieldOption: DraftOption = {
+        id: 'perk_max_shield',
+        kind: 'perk',
+        perkId: 'max_shield',
+        title: '+1 Max Shield',
+        description: '+1 Max Shield (up to 3) and restores Shield.',
+      };
+
+      // 1st pick: 1 -> 2
+      engine.phase = 'draft';
+      engine.selectDraftOption(shieldOption);
+      expect(engine.player.maxShield).toBe(2);
+      expect(engine.player.shield).toBe(2);
+      expect(engine.player.perks.max_shield).toBe(1);
+
+      // 2nd pick: 2 -> 3
+      engine.phase = 'draft';
+      engine.selectDraftOption(shieldOption);
+      expect(engine.player.maxShield).toBe(3);
+      expect(engine.player.shield).toBe(3);
+      expect(engine.player.perks.max_shield).toBe(2);
+
+      // 3rd pick: clamped at 3
+      engine.phase = 'draft';
+      engine.selectDraftOption(shieldOption);
+      expect(engine.player.maxShield).toBe(3);
+      expect(engine.player.shield).toBe(3);
+      expect(engine.player.perks.max_shield).toBe(2);
+
+      // generateDraftOptions never offers max_shield once maxShield >= 3 or perks.max_shield >= 2
+      for (let i = 0; i < 30; i++) {
+        const opts = generateDraftOptions(engine.player, 4);
+        expect(opts.some((opt) => opt.perkId === 'max_shield')).toBe(false);
+      }
+
+      engine.player.perks.max_shield = 0;
+      engine.player.maxShield = 3;
+      for (let i = 0; i < 20; i++) {
+        const opts = generateDraftOptions(engine.player, 4);
+        expect(opts.some((opt) => opt.perkId === 'max_shield')).toBe(false);
+      }
+    });
+
+    it('triggers brake_shockwave bullet clear only when chargeTier >= 1', () => {
+      const engine = new GameEngine();
+      engine.startNewRun('railgun');
+      engine.hazards = [];
+      engine.enemies = [
+        {
+          id: 20001,
+          kind: 'slime',
+          x: 230,
+          y: 70,
+          vx: 0,
+          vy: 0,
+          radius: 10,
+          hp: 20,
+          maxHp: 20,
+          hitFlash: 0,
+          slammedTimer: 0,
+          angle: 0,
+          stateTimer: 10,
+          canShoot: false,
+        },
+      ];
+
+      engine.player.perks.brake_shockwave = 1;
+      engine.player.x = 135;
+      engine.player.y = 300;
+      engine.player.vx = 0;
+      engine.player.vy = -260;
+      engine.player.aimDirX = 0;
+      engine.player.aimDirY = -1;
+      engine.player.armored = true;
+      engine.player.chargeTier = 0;
+
+      engine.projectiles = [
+        {
+          id: 20002,
+          fromPlayer: false,
+          x: 135,
+          y: 280,
+          vx: 0,
+          vy: 60,
+          radius: 3.5,
+          damage: 1,
+          life: 3,
+          color: COLORS.bulletRed,
+        },
+      ];
+
+      // Uncharged Brake Tap (chargeTier = 0) does NOT clear adjacent enemy bullet
+      triggerQuickTap(engine, 135, 300, 1, 1000, 50);
+      expect(engine.projectiles).toHaveLength(1);
+
+      // Charged Brake Tap (chargeTier = 1) DOES clear adjacent enemy bullet
+      engine.player.vx = 0;
+      engine.player.vy = -260;
+      engine.player.aimDirX = 0;
+      engine.player.aimDirY = -1;
+      engine.player.armored = true;
+      engine.player.chargeTier = 1;
+
+      triggerQuickTap(engine, 135, 300, 2, 1200, 50);
+      expect(engine.projectiles).toHaveLength(0);
+    });
+
+    it('keeps Room 1 Slimes non-shooting for 4s while Room 2+ Slimes fire crimson bullets', () => {
+      // Room 1
+      const room1Engine = new GameEngine();
+      room1Engine.startNewRun('railgun');
+      expect(room1Engine.enemies.every((e) => e.kind === 'slime' && e.canShoot === false)).toBe(
+        true,
+      );
+      room1Engine.player.x = 135;
+      room1Engine.player.y = 445;
+
+      const steps4s = Math.round(4 / PHYSICS.FIXED_DT);
+      for (let i = 0; i < steps4s; i++) {
+        room1Engine.stepSimulation(PHYSICS.FIXED_DT);
+      }
+      expect(room1Engine.projectiles).toHaveLength(0);
+
+      // Room 2+
+      const room2 = generateRoom(2);
+      const room2Slime = room2.enemies.find((e) => e.kind === 'slime');
+      expect(room2Slime).toBeDefined();
+      expect(room2Slime!.canShoot).toBe(true);
+
+      const room2Engine = new GameEngine();
+      room2Engine.startNewRun('railgun');
+      room2Engine.hazards = [];
+      room2Slime!.x = 135;
+      room2Slime!.y = 100;
+      room2Slime!.fireTimer = 0.05;
+      room2Engine.enemies = [room2Slime!];
+      room2Engine.player.x = 135;
+      room2Engine.player.y = 445;
+
+      for (let i = 0; i < 20; i++) {
+        room2Engine.stepSimulation(PHYSICS.FIXED_DT);
+      }
+      const enemyBullets = room2Engine.projectiles.filter(
+        (pr) => !pr.fromPlayer && pr.color === COLORS.bulletRed,
+      );
+      expect(enemyBullets.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('spawns 4 crimson bullets and toggles spikePhaseParity on Spike Slime telegraph -> spiked', () => {
+      const engine = new GameEngine();
+      engine.startNewRun('railgun');
+      engine.hazards = [];
+      engine.player.x = 135;
+      engine.player.y = 420;
+
+      const spikeSlime: Enemy = {
+        id: 20100,
+        kind: 'spike_slime',
+        x: 135,
+        y: 150,
+        vx: 0,
+        vy: 0,
+        radius: 11,
+        hp: 4,
+        maxHp: 4,
+        hitFlash: 0,
+        slammedTimer: 0,
+        angle: 0,
+        stateTimer: 0.01,
+        spikeState: 'telegraph',
+        spikePhaseParity: 0,
+      };
+      engine.enemies = [spikeSlime];
+
+      engine.stepSimulation(PHYSICS.FIXED_DT);
+      engine.stepSimulation(PHYSICS.FIXED_DT);
+
+      expect(spikeSlime.spikeState).toBe('spiked');
+      expect(spikeSlime.spikePhaseParity).toBe(1);
+      const wave1 = engine.projectiles.filter(
+        (pr) => !pr.fromPlayer && pr.color === COLORS.bulletRed,
+      );
+      expect(wave1).toHaveLength(4);
+
+      // Next eruption toggles parity back 1 -> 0 and fires rotated 4-way wave
+      engine.projectiles = [];
+      spikeSlime.spikeState = 'telegraph';
+      spikeSlime.stateTimer = 0.01;
+      engine.stepSimulation(PHYSICS.FIXED_DT);
+      engine.stepSimulation(PHYSICS.FIXED_DT);
+
+      expect(spikeSlime.spikeState).toBe('spiked');
+      expect(spikeSlime.spikePhaseParity).toBe(0);
+      const wave2 = engine.projectiles.filter(
+        (pr) => !pr.fromPlayer && pr.color === COLORS.bulletRed,
+      );
+      expect(wave2).toHaveLength(4);
+    });
+
+    it('fires Sniper 2-round burst in Room 3 vs immediate 3-way fan in Room 4+', () => {
+      // Room 3: 2-round burst
+      const room3 = generateRoom(3);
+      const sniper3 = room3.enemies.find((e) => e.kind === 'sniper');
+      expect(sniper3).toBeDefined();
+      expect(sniper3!.isFanShot).toBe(false);
+
+      const engine3 = new GameEngine();
+      engine3.startNewRun('railgun');
+      engine3.hazards = [];
+      engine3.player.x = 135;
+      engine3.player.y = 420;
+      sniper3!.x = 135;
+      sniper3!.y = 120;
+      sniper3!.angle = Math.PI / 2;
+      sniper3!.sniperState = 'locked';
+      sniper3!.stateTimer = 0.01;
+      sniper3!.burstRemaining = 0;
+      sniper3!.burstCooldown = 0;
+      engine3.enemies = [sniper3!];
+
+      engine3.stepSimulation(PHYSICS.FIXED_DT);
+      engine3.stepSimulation(PHYSICS.FIXED_DT);
+      expect(engine3.projectiles).toHaveLength(1);
+      expect(sniper3!.burstRemaining).toBe(1);
+
+      const stepsBurst = Math.ceil(0.15 / PHYSICS.FIXED_DT);
+      for (let i = 0; i < stepsBurst; i++) {
+        engine3.stepSimulation(PHYSICS.FIXED_DT);
+      }
+      expect(engine3.projectiles).toHaveLength(2);
+      expect(sniper3!.burstRemaining).toBe(0);
+
+      // Room 4+: immediate 3-way fan
+      const room4 = generateRoom(4);
+      const sniper4 = room4.enemies.find((e) => e.kind === 'sniper');
+      expect(sniper4).toBeDefined();
+      expect(sniper4!.isFanShot).toBe(true);
+
+      const engine4 = new GameEngine();
+      engine4.startNewRun('railgun');
+      engine4.hazards = [];
+      engine4.player.x = 135;
+      engine4.player.y = 420;
+      sniper4!.x = 135;
+      sniper4!.y = 120;
+      sniper4!.angle = Math.PI / 2;
+      sniper4!.sniperState = 'locked';
+      sniper4!.stateTimer = 0.01;
+      engine4.enemies = [sniper4!];
+
+      engine4.stepSimulation(PHYSICS.FIXED_DT);
+      engine4.stepSimulation(PHYSICS.FIXED_DT);
+      expect(engine4.projectiles).toHaveLength(3);
+      expect(
+        engine4.projectiles.every((pr) => !pr.fromPlayer && pr.color === COLORS.bulletRed),
+      ).toBe(true);
+    });
+
+    it('spawns 6 radial crimson shrapnel bullets when bomb_bot detonates', () => {
+      const engine = new GameEngine();
+      engine.startNewRun('railgun');
+      engine.hazards = [];
+
+      const bombBot: Enemy = {
+        id: 20200,
+        kind: 'bomb_bot',
+        x: 135,
+        y: 160,
+        vx: 0,
+        vy: 0,
+        radius: 10,
+        hp: 2,
+        maxHp: 2,
+        hitFlash: 0,
+        slammedTimer: 0,
+        angle: 0,
+        stateTimer: 10,
+      };
+      const anchorSlime: Enemy = {
+        id: 20201,
+        kind: 'slime',
+        x: 235,
+        y: 70,
+        vx: 0,
+        vy: 0,
+        radius: 10,
+        hp: 20,
+        maxHp: 20,
+        hitFlash: 0,
+        slammedTimer: 0,
+        angle: 0,
+        stateTimer: 10,
+        canShoot: false,
+      };
+      engine.enemies = [bombBot, anchorSlime];
+
+      engine.player.x = 135;
+      engine.player.y = 300;
+      engine.player.vx = 0;
+      engine.player.vy = -260;
+      engine.player.aimDirX = 0;
+      engine.player.aimDirY = -1;
+      engine.player.armored = true;
+      engine.player.chargeTier = 0;
+
+      triggerQuickTap(engine, 135, 300, 1, 1000, 50);
+
+      expect(bombBot.hp).toBeLessThanOrEqual(0);
+      const shrapnel = engine.projectiles.filter(
+        (pr) => !pr.fromPlayer && pr.color === COLORS.bulletRed,
+      );
+      expect(shrapnel).toHaveLength(6);
+    });
+
+    it('spawns drone in Room 3+ and fires 5 spiral crimson bullets when fireTimer <= 0', () => {
+      const room3 = generateRoom(3);
+      const drone = room3.enemies.find((e) => e.kind === 'drone');
+      expect(drone).toBeDefined();
+
+      const engine = new GameEngine();
+      engine.startNewRun('railgun');
+      engine.hazards = [];
+      engine.player.x = 135;
+      engine.player.y = 420;
+      drone!.x = 135;
+      drone!.y = 140;
+      drone!.fireTimer = 0.02;
+      engine.enemies = [drone!];
+
+      for (let i = 0; i < 6; i++) {
+        engine.stepSimulation(PHYSICS.FIXED_DT);
+      }
+
+      const spiralBullets = engine.projectiles.filter(
+        (pr) => !pr.fromPlayer && pr.color === COLORS.bulletRed,
+      );
+      expect(spiralBullets).toHaveLength(5);
+    });
+
+    it('steps Boss through Phase 1 (Aimed 5-Way Fan & Double Spiral) and Phase 2 (Cross-Ring + Aimed Burst)', () => {
+      const bossRoom = generateRoom(5);
+      expect(bossRoom.isBossRoom).toBe(true);
+      const boss = bossRoom.enemies.find((e) => e.kind === 'boss')!;
+      expect(boss).toBeDefined();
+
+      const engine = new GameEngine();
+      engine.startNewRun('railgun');
+      engine.roomNumber = 5;
+      engine.hazards = [];
+      engine.player.x = 135;
+      engine.player.y = 445;
+      boss.x = 135;
+      boss.y = 130;
+      engine.enemies = [boss];
+
+      const stepFor = (sec: number) => {
+        const steps = Math.ceil(sec / PHYSICS.FIXED_DT);
+        for (let i = 0; i < steps; i++) {
+          engine.stepSimulation(PHYSICS.FIXED_DT);
+        }
+      };
+
+      // Phase 1, Pattern 1: Aimed 5-Way Fan
+      boss.hp = boss.maxHp;
+      boss.bossPhase = 0;
+      boss.bossPattern = 0;
+      boss.stateTimer = 0.01;
+      stepFor(0.02); // enters telegraph for Pattern 1
+      expect(boss.bossPhase).toBe(1);
+      expect(boss.bossPattern).toBe(1);
+      stepFor(0.61); // fires 5-way fan
+      expect(engine.projectiles.filter((pr) => !pr.fromPlayer)).toHaveLength(5);
+
+      // Phase 1, Pattern 0: Double Spiral (2 radial bursts of 10 in Room 5)
+      engine.projectiles = [];
+      boss.bossPhase = 0;
+      boss.bossPattern = 1;
+      boss.stateTimer = 0.01;
+      stepFor(0.02); // enters telegraph for Pattern 0
+      expect(boss.bossPhase).toBe(1);
+      expect(boss.bossPattern).toBe(0);
+      stepFor(0.61); // fires 1st radial ring + queues 2nd burst
+      expect(engine.projectiles.filter((pr) => !pr.fromPlayer)).toHaveLength(10);
+      expect(boss.burstRemaining).toBe(1);
+      stepFor(0.35); // fires 2nd radial ring
+      expect(engine.projectiles.filter((pr) => !pr.fromPlayer)).toHaveLength(20);
+      expect(boss.burstRemaining).toBe(0);
+
+      // Phase 2 (<= 50% HP), Pattern 2: Cross-Ring + Aimed Burst
+      engine.projectiles = [];
+      boss.hp = Math.floor(boss.maxHp * 0.5);
+      boss.bossPhase = 0;
+      boss.bossPattern = 1;
+      boss.burstRemaining = 0;
+      boss.stateTimer = 0.01;
+      stepFor(0.02); // enters telegraph for Pattern 2 (patternCount = 3)
+      expect(boss.bossPhase).toBe(1);
+      expect(boss.bossPattern).toBe(2);
+      stepFor(0.51); // fires Cross-Ring (10 bullets) + queues 2 aimed bursts
+      expect(engine.projectiles.filter((pr) => !pr.fromPlayer)).toHaveLength(10);
+      expect(boss.burstRemaining).toBe(2);
+      stepFor(0.34); // fires 2 aimed follow-up shots (total 12 bullets)
+      expect(engine.projectiles.filter((pr) => !pr.fromPlayer)).toHaveLength(12);
+      expect(boss.burstRemaining).toBe(0);
     });
   });
 });

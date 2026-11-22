@@ -42,8 +42,9 @@ export const COMBAT = {
   HITSTOP_HEAVY_SEC: 0.045,
   HITSTOP_LIGHT_SEC: 0.022,
   MAX_CHARGE_TIER: 3,
-  MAX_WEAPON_UPGRADES: 4,
-  MAX_WEAPON_MOD_RANK: 2,
+  MAX_WEAPON_UPGRADES: 2,
+  MAX_WEAPON_MOD_RANK: 1,
+  HARD_MAX_SHIELD: 3,
   BOSS_SHIELD_HALF_ANGLE_RAD: (48 * Math.PI) / 180,
   RAM_BASE_DAMAGE: 1,
   WALL_SLAM_BONUS_DAMAGE: 2,
@@ -51,8 +52,17 @@ export const COMBAT = {
   BOMB_DAMAGE: 3,
   BARREL_BLAST_RADIUS: 48,
   BARREL_DAMAGE: 4,
-  BRAKE_SHOCKWAVE_RADIUS: 46,
+  BRAKE_SHOCKWAVE_RADIUS: 34,
   EXPLOSIVE_SLAM_RADIUS: 36,
+} as const;
+
+export const PERK_MAX_RANKS = {
+  preview_bounce: 1,
+  explosive_slam: 2,
+  brake_shockwave: 1,
+  longer_focus: 2,
+  max_shield: 2,
+  bounce_speed: 2,
 } as const;
 
 export const OVERHEAT = {
@@ -93,6 +103,7 @@ export const COLORS = {
   sniper: '#b967ff',
   sniperLaser: '#ff2b45',
   bombBot: '#ff8c2e',
+  drone: '#ff5286',
   bossShell: '#4f5d8a',
   bossCore: '#ff2e88',
   bossShield: '#8bb8ff',
