@@ -113,6 +113,11 @@ body {
   transform: translateY(1px);
 }
 
+.pixel-btn-mini.skip {
+  border-color: #6b5322;
+  color: var(--neon-gold);
+}
+
 .overlay-backdrop {
   position: absolute;
   inset: 0;
@@ -229,6 +234,28 @@ body {
   color: #fff;
   border-color: #ff9bc7;
   box-shadow: 0 4px 0 #7b0d3c, 0 0 16px rgba(255, 46, 136, 0.35);
+}
+
+.title-actions {
+  width: 100%;
+  max-width: 340px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pixel-cta.secondary {
+  background: #12172b;
+  color: var(--neon-cyan);
+  border-color: #344270;
+  box-shadow: 0 3px 0 #060811;
+  font-size: 12px;
+  padding: 8px 12px;
+}
+
+.pixel-cta.secondary:hover {
+  border-color: var(--neon-cyan);
+  background: #171f3b;
 }
 
 .draft-header {

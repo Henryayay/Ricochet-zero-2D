@@ -47,6 +47,11 @@ import {
   generateRoom,
   generateWeaponTransferOptions,
 } from './rooms.ts';
+import {
+  buildTutorialRenderState,
+  spawnTutorialStage,
+  TUTORIAL_STAGE_COUNT,
+} from './tutorial.ts';
 import { fireActiveWeapon } from './weapons.ts';
 
 export type GamePhase = 'title' | 'playing' | 'transition' | 'draft' | 'gameover';
@@ -120,6 +125,16 @@ export class GameEngine {
   private selectedStartWeapon: WeaponId = 'railgun';
   private pendingWeaponTransfers = 0;
 
+  // Interactive tutorial state
+  private tutorialCompleted = false;
+  private tutorialActive = false;
+  private tutorialStageIndex = 0;
+  private tutorialReturnToTitle = false;
+  private tutorialPostStartWeapon: WeaponId = 'railgun';
+  private tutorialUsedRam = false;
+  private tutorialFiredChargedBrake = false;
+  private tutorialUsedSlowMo = false;
+
   // One-thumb pointer state machine
   private activePointerId: number | null = null;
   private pointerDownPos: Vec2 = { x: 0, y: 0 };
@@ -142,8 +157,10 @@ export class GameEngine {
       const bs = Number(localStorage.getItem(STORAGE_KEYS.BEST_SCORE) ?? '0');
       const br = Number(localStorage.getItem(STORAGE_KEYS.BEST_ROOM) ?? '1');
       const muted = localStorage.getItem(STORAGE_KEYS.MUTED) === '1';
+      const tutDone = localStorage.getItem(STORAGE_KEYS.TUTORIAL_DONE) === '1';
       if (Number.isFinite(bs) && bs > 0) this.bestScore = bs;
       if (Number.isFinite(br) && br >= 1) this.bestRoom = br;
+      this.tutorialCompleted = tutDone;
       this.audio.setMuted(muted);
     } catch {
       // Ignore storage failures in restricted contexts
@@ -156,6 +173,7 @@ export class GameEngine {
       localStorage.setItem(STORAGE_KEYS.BEST_SCORE, String(Math.floor(this.bestScore)));
       localStorage.setItem(STORAGE_KEYS.BEST_ROOM, String(this.bestRoom));
       localStorage.setItem(STORAGE_KEYS.MUTED, this.audio.isMuted() ? '1' : '0');
+      localStorage.setItem(STORAGE_KEYS.TUTORIAL_DONE, this.tutorialCompleted ? '1' : '0');
     } catch {
       // Ignore storage failures
     }
@@ -235,8 +253,126 @@ export class GameEngine {
     return next;
   }
 
+  isTutorialCompleted(): boolean {
+    return this.tutorialCompleted;
+  }
+
+  isTutorialActive(): boolean {
+    return this.tutorialActive;
+  }
+
+  getTutorialStageIndex(): number {
+    return this.tutorialStageIndex;
+  }
+
+  startTutorial(options: { returnToTitle?: boolean; postWeapon?: WeaponId } = {}): void {
+    this.audio.init();
+    this.tutorialActive = true;
+    this.tutorialStageIndex = 0;
+    this.tutorialReturnToTitle = options.returnToTitle ?? false;
+    this.tutorialPostStartWeapon = options.postWeapon ?? this.selectedStartWeapon;
+
+    // Tutorial locks to Railgun for clear straight-line aiming
+    this.player = this.createFreshPlayer('railgun');
+    this.roomNumber = 1;
+    this.isBossRoom = false;
+    this.score = 0;
+    this.flowMultiplier = 1.0;
+    this.hitstopTimer = 0;
+    this.shakeTimer = 0;
+    this.shakeIntensity = 0;
+    this.multiKillCount = 0;
+    this.multiKillTimer = 0;
+    this.pendingWeaponTransfers = 0;
+    this.clearPointerState(false);
+    this.loadTutorialStage(0, false);
+    this.setPhase('playing');
+    this.audio.startMusic(1);
+  }
+
+  skipTutorial(): void {
+    if (!this.tutorialActive) return;
+    this.finishTutorial();
+  }
+
+  private loadTutorialStage(stageIndex: number, preserveEffects = false): void {
+    const spawned = spawnTutorialStage(stageIndex);
+    this.tutorialStageIndex = stageIndex;
+    this.enemies = spawned.enemies;
+    this.hazards = spawned.hazards;
+    this.isBossRoom = false;
+    this.roomName = spawned.roomName;
+    this.projectiles = [];
+    this.sawblades = [];
+    if (!preserveEffects) {
+      this.beams = [];
+      this.arcs = [];
+      this.rings = [];
+      this.particles = [];
+      this.floatingTexts = [];
+    }
+    this.roomTimer = 0;
+    this.overheatWarnSecond = -1;
+    this.tookDamageThisRoom = false;
+    this.tutorialUsedRam = false;
+    this.tutorialFiredChargedBrake = false;
+    this.tutorialUsedSlowMo = false;
+
+    this.player.x = CANVAS_WIDTH / 2;
+    this.player.y = 395;
+    this.player.vx = 0;
+    this.player.vy = 0;
+    this.player.aimDirX = 0;
+    this.player.aimDirY = -1;
+    this.player.armored = false;
+    this.player.chargeTier = 0;
+    this.player.trail = [];
+    this.player.hp = this.player.maxHp;
+    this.player.shield = this.player.maxShield;
+    this.player.iframes = 0;
+
+    this.audio.setMusicTrack(1, false);
+    this.updateMusicIntensity();
+  }
+
+  private resetCurrentTutorialDrill(hint: string): void {
+    this.clearPointerState(true);
+    this.loadTutorialStage(this.tutorialStageIndex, true);
+    this.addFloatingText(CANVAS_WIDTH / 2, 225, hint, COLORS.textGold, 1.0);
+  }
+
+  private advanceTutorialStage(): void {
+    this.clearPointerState(true);
+    this.audio.playRoomClear();
+    const nextIndex = this.tutorialStageIndex + 1;
+    if (nextIndex >= TUTORIAL_STAGE_COUNT) {
+      this.finishTutorial();
+      return;
+    }
+    this.loadTutorialStage(nextIndex, true);
+    this.addFloatingText(CANVAS_WIDTH / 2, 225, 'DRILL CLEAR!', COLORS.slime, 1.05);
+  }
+
+  private finishTutorial(): void {
+    this.tutorialCompleted = true;
+    this.savePersistentState();
+    const returnToTitle = this.tutorialReturnToTitle;
+    const postWeapon = this.tutorialPostStartWeapon;
+    this.tutorialActive = false;
+    this.clearPointerState(true);
+
+    if (returnToTitle) {
+      this.selectedStartWeapon = postWeapon;
+      this.player = this.createFreshPlayer(postWeapon);
+      this.setPhase('title');
+    } else {
+      this.startNewRun(postWeapon);
+    }
+  }
+
   startNewRun(weapon = this.selectedStartWeapon): void {
     this.audio.init();
+    this.tutorialActive = false;
     this.selectedStartWeapon = weapon;
     this.player = this.createFreshPlayer(weapon);
     this.roomNumber = 1;
@@ -443,6 +579,9 @@ export class GameEngine {
       this.isSlingshotDragging = true;
       this.focusRemainingSec = this.getMaxFocusDuration();
       this.slowMoActive = true;
+      if (this.tutorialActive) {
+        this.tutorialUsedSlowMo = true;
+      }
       this.audio.playSlowMoEnter();
     }
   }
@@ -596,6 +735,9 @@ export class GameEngine {
     });
 
     // Charge resets after firing
+    if (this.tutorialActive && this.player.chargeTier >= 1) {
+      this.tutorialFiredChargedBrake = true;
+    }
     this.player.chargeTier = 0;
   }
 
@@ -680,6 +822,7 @@ export class GameEngine {
   }
 
   private checkOverheatWarning(): void {
+    if (this.tutorialActive) return;
     const delay = this.getOverheatDelaySec();
     const warnStart = OVERHEAT.WARNING_START_SEC + delay;
     const overheatStart = OVERHEAT.OVERHEAT_START_SEC + delay;
@@ -746,7 +889,14 @@ export class GameEngine {
 
     const wallRes = stepCircleArena(p, dt, this.getWallRestitution());
     if (wallRes.hitWall) {
-      const overheated = this.roomTimer >= OVERHEAT.OVERHEAT_START_SEC + this.getOverheatDelaySec();
+      const postSpeed = len(p.vx, p.vy);
+      if (postSpeed >= PHYSICS.STOP_SPEED_THRESHOLD) {
+        p.aimDirX = p.vx / postSpeed;
+        p.aimDirY = p.vy / postSpeed;
+      }
+      const overheated =
+        !this.tutorialActive &&
+        this.roomTimer >= OVERHEAT.OVERHEAT_START_SEC + this.getOverheatDelaySec();
       if (overheated) {
         this.audio.playBounce(p.chargeTier, true);
         this.spawnSparks(p.x, p.y, wallRes.normalX, wallRes.normalY, COLORS.wallOverheat, 8, 60, 140);
@@ -948,8 +1098,8 @@ export class GameEngine {
               e.fireTimer = 2.4 + Math.random() * 0.8;
             }
           }
-          const desiredVx = toPlayer.x * moveSpeed;
-          const desiredVy = toPlayer.y * moveSpeed;
+          const desiredVx = e.stationary ? 0 : toPlayer.x * moveSpeed;
+          const desiredVy = e.stationary ? 0 : toPlayer.y * moveSpeed;
           e.vx += (desiredVx - e.vx) * Math.min(1, dt * PHYSICS.ENEMY_KNOCKBACK_DRAG);
           e.vy += (desiredVy - e.vy) * Math.min(1, dt * PHYSICS.ENEMY_KNOCKBACK_DRAG);
           break;
@@ -1038,13 +1188,18 @@ export class GameEngine {
         case 'drone': {
           e.stateTimer += dt;
           e.angle += dt * 1.35;
-          const anchorX = 135 + Math.sin(e.stateTimer * 0.95 + e.id) * 65;
-          const anchorY = 140 + Math.cos(e.stateTimer * 0.7 + e.id) * 45;
-          const toAnchor = normalizeOr(anchorX - e.x, anchorY - e.y, 0, 0);
-          const anchorDist = len(anchorX - e.x, anchorY - e.y);
-          const moveSpeed = anchorDist > 5 ? 32 : 0;
-          e.vx += (toAnchor.x * moveSpeed - e.vx) * Math.min(1, dt * 3.5);
-          e.vy += (toAnchor.y * moveSpeed - e.vy) * Math.min(1, dt * 3.5);
+          if (e.stationary) {
+            e.vx *= Math.exp(-PHYSICS.ENEMY_KNOCKBACK_DRAG * dt);
+            e.vy *= Math.exp(-PHYSICS.ENEMY_KNOCKBACK_DRAG * dt);
+          } else {
+            const anchorX = 135 + Math.sin(e.stateTimer * 0.95 + e.id) * 65;
+            const anchorY = 140 + Math.cos(e.stateTimer * 0.7 + e.id) * 45;
+            const toAnchor = normalizeOr(anchorX - e.x, anchorY - e.y, 0, 0);
+            const anchorDist = len(anchorX - e.x, anchorY - e.y);
+            const moveSpeed = anchorDist > 5 ? 32 : 0;
+            e.vx += (toAnchor.x * moveSpeed - e.vx) * Math.min(1, dt * 3.5);
+            e.vy += (toAnchor.y * moveSpeed - e.vy) * Math.min(1, dt * 3.5);
+          }
 
           e.fireTimer = (e.fireTimer ?? 1.5) - dt;
           if (e.fireTimer <= 0) {
@@ -1173,6 +1328,9 @@ export class GameEngine {
             const ramDmg = COMBAT.RAM_BASE_DAMAGE + (p.chargeTier >= 2 ? 1 : 0);
             const knockSpeed = 290 + p.chargeTier * 35 + p.perks.heavy_ram * 45;
             e.slammedTimer = 0.8;
+            if (this.tutorialActive) {
+              this.tutorialUsedRam = true;
+            }
             this.audio.playRam(p.chargeTier >= 2);
             this.triggerHitstop(COMBAT.HITSTOP_LIGHT_SEC);
             this.addShake(ramDir.x, ramDir.y, 3.5);
@@ -1511,6 +1669,21 @@ export class GameEngine {
     const p = this.player;
     if (p.iframes > 0 || this.phase !== 'playing') return;
 
+    if (this.tutorialActive) {
+      this.audio.playShieldBreak();
+      this.triggerHitstop(COMBAT.HITSTOP_LIGHT_SEC);
+      this.addShake(knockX, knockY, 4.5);
+      this.spawnSparks(p.x, p.y, knockX, knockY, COLORS.textRed, 10, 60, 140, Math.PI * 2);
+      const hint =
+        this.tutorialStageIndex === 0
+          ? 'PULL FURTHER TO RAM!'
+          : this.tutorialStageIndex === 2
+            ? 'RED PIERCES ARMOR!'
+            : 'WATCH OUT! TRY AGAIN';
+      this.resetCurrentTutorialDrill(hint);
+      return;
+    }
+
     p.iframes = COMBAT.PLAYER_IFRAMES_SEC;
     p.flashTimer = 0.25;
     this.tookDamageThisRoom = true;
@@ -1593,6 +1766,23 @@ export class GameEngine {
     this.hazards = this.hazards.filter((h) => !h.triggered);
 
     if (this.enemies.length === 0 && this.phase === 'playing') {
+      if (this.tutorialActive) {
+        if (this.tutorialStageIndex === 0 && !this.tutorialUsedRam) {
+          this.resetCurrentTutorialDrill('RAM SLIMES AT SPEED!');
+          return;
+        }
+        if (this.tutorialStageIndex === 1 && !this.tutorialFiredChargedBrake) {
+          this.resetCurrentTutorialDrill('BOUNCE WALL + TAP FIRE!');
+          return;
+        }
+        if (this.tutorialStageIndex === 2 && !this.tutorialUsedSlowMo) {
+          this.resetCurrentTutorialDrill('DRAG FOR 0.2X SLOW-MO!');
+          return;
+        }
+        this.advanceTutorialStage();
+        return;
+      }
+
       if (!this.tookDamageThisRoom) {
         const noHitGain = 0.5 + this.player.perks.flow_surge * 0.5;
         this.flowMultiplier = Math.min(
@@ -1730,6 +1920,19 @@ export class GameEngine {
   }
 
   getRenderState(): RenderState {
+    const tutorial = this.tutorialActive
+      ? buildTutorialRenderState({
+          stageIndex: this.tutorialStageIndex,
+          player: this.player,
+          enemies: this.enemies,
+          hazards: this.hazards,
+          projectiles: this.projectiles,
+          isDragging: this.isSlingshotDragging,
+          slowMoActive: this.slowMoActive,
+          usedSlowMo: this.tutorialUsedSlowMo,
+        })
+      : undefined;
+
     return {
       phase: this.phase,
       player: this.player,
@@ -1752,6 +1955,7 @@ export class GameEngine {
       transitionProgress: clamp(this.transitionTimer / TRANSITION.ROOM_SCROLL_SEC, 0, 1),
       aim: this.buildAimRenderState(),
       time: this.timeElapsed,
+      tutorial,
     };
   }
 

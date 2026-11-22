@@ -20,6 +20,7 @@ import type {
   Vec2,
   WeaponId,
 } from './entities.ts';
+import type { TutorialRenderInfo } from './tutorial.ts';
 
 export interface AimRenderState {
   active: boolean;
@@ -53,6 +54,7 @@ export interface RenderState {
   transitionProgress: number;
   aim: AimRenderState;
   time: number;
+  tutorial?: TutorialRenderInfo;
 }
 
 type SpritePalette = Record<string, string>;
@@ -276,6 +278,20 @@ const SHIELD_EMPTY_SPRITE = [
   '.o...o.',
   '..o.o..',
   '...o...',
+] as const;
+
+const FINGER_SPRITE = [
+  '..oo......',
+  '.owwo.....',
+  '.owwo.....',
+  '.owwo.....',
+  '.owwooooo.',
+  'oowwowwowo',
+  'owwwwwwcwo',
+  'owwwwwwwwo',
+  'owwwwwwwwo',
+  '.owwwwwwo.',
+  '..oooooo..',
 ] as const;
 
 function clamp(v: number, min: number, max: number): number {
@@ -595,6 +611,12 @@ export class GameRenderer {
     // 17. Overheat countdown / warning banner inside arena
     this.drawOverheatOverlay(ctx, state);
 
+    // 18. Tutorial diegetic cues & compact top banner
+    if (state.phase === 'playing' && state.tutorial?.active) {
+      this.drawTutorialCues(ctx, state.tutorial, state.time);
+      this.drawTutorialBanner(ctx, state.tutorial, state.time);
+    }
+
     ctx.restore(); // End arena clip
 
     ctx.restore(); // End screen shake
@@ -722,6 +744,7 @@ export class GameRenderer {
   }
 
   private getEffectiveOverheatTimer(state: RenderState): number {
+    if (state.tutorial?.active) return 0;
     return state.roomTimer - (state.overheatDelaySec ?? 0);
   }
 
@@ -2017,6 +2040,111 @@ export class GameRenderer {
     ctx.restore();
   }
 
+  private drawTutorialCues(
+    ctx: CanvasRenderingContext2D,
+    tut: TutorialRenderInfo,
+    time: number,
+  ): void {
+    // Pulsing target highlight ring
+    if (tut.highlightPos) {
+      const pulse = 0.5 + 0.5 * Math.sin(time * 7);
+      const r = 14 + Math.round(pulse * 4);
+      ctx.save();
+      ctx.globalAlpha = 0.45 + 0.35 * pulse;
+      this.drawPixelCircleStroke(ctx, tut.highlightPos.x, tut.highlightPos.y, r, COLORS.textCyan, 1);
+      ctx.restore();
+    }
+
+    // Animated drag gesture ghost (simple finger pulling slingshot)
+    if (tut.showDragHint) {
+      const cycle = (time % 1.35) / 1.35;
+      const moveT = clamp(cycle / 0.65, 0, 1);
+      const eased = easeOutCubic(moveT);
+      const fadeAlpha = cycle > 0.78 ? clamp((1 - cycle) / 0.22, 0, 1) : 1;
+
+      const gx = tut.cueFrom.x + (tut.cueTo.x - tut.cueFrom.x) * eased;
+      const gy = tut.cueFrom.y + (tut.cueTo.y - tut.cueFrom.y) * eased;
+
+      ctx.save();
+      ctx.globalAlpha = 0.9 * fadeAlpha;
+      // Dotted guide line from start to current ghost touch point
+      const dist = Math.hypot(gx - tut.cueFrom.x, gy - tut.cueFrom.y);
+      if (dist > 3) {
+        const ux = (gx - tut.cueFrom.x) / dist;
+        const uy = (gy - tut.cueFrom.y) / dist;
+        for (let d = 4; d < dist; d += 4) {
+          ctx.fillStyle = COLORS.textCyan;
+          ctx.fillRect(
+            Math.round(tut.cueFrom.x + ux * d),
+            Math.round(tut.cueFrom.y + uy * d),
+            1,
+            1,
+          );
+        }
+      }
+      // Simple pointing finger sprite (fingertip anchored near gx, gy)
+      this.drawSprite(
+        ctx,
+        FINGER_SPRITE,
+        { o: '#07080f', w: '#eef4ff', c: COLORS.textCyan },
+        gx + 2,
+        gy + 5,
+        1,
+      );
+      this.drawPixelText(ctx, 'DRAG', gx + 2, gy + 13, COLORS.textCyan, 1, 'center');
+      ctx.restore();
+    }
+
+    // Animated quick-tap prompt when charged & armored
+    if (tut.showTapHint) {
+      const pulse = (time * 2.4) % 1;
+      const tapX = CANVAS_WIDTH / 2;
+      const tapY = 432;
+      const ringR = 5 + Math.round(pulse * 12);
+      ctx.save();
+      ctx.globalAlpha = clamp(1 - pulse, 0.15, 0.95);
+      this.drawPixelCircleStroke(ctx, tapX, tapY, ringR, COLORS.textGold, 1);
+      ctx.globalAlpha = 0.95;
+      this.drawPixelCircleFill(ctx, tapX, tapY, 3, COLORS.textGold);
+      this.drawPixelText(ctx, 'TAP TO FIRE!', tapX, tapY + 11, COLORS.textGold, 1, 'center');
+      ctx.restore();
+    }
+  }
+
+  private drawTutorialBanner(
+    ctx: CanvasRenderingContext2D,
+    tut: TutorialRenderInfo,
+    time: number,
+  ): void {
+    const bx = 14;
+    const by = 43;
+    const bw = CANVAS_WIDTH - 28;
+    const bh = 27;
+
+    ctx.fillStyle = 'rgba(9, 12, 24, 0.88)';
+    ctx.fillRect(bx, by, bw, bh);
+
+    const borderCol =
+      tut.showTapHint && Math.sin(time * 12) > 0
+        ? COLORS.textGold
+        : tut.stageIndex === 2
+          ? COLORS.textRed
+          : COLORS.textCyan;
+    ctx.fillStyle = borderCol;
+    ctx.fillRect(bx, by, bw, 1);
+    ctx.fillRect(bx, by + bh - 1, bw, 1);
+    ctx.fillRect(bx, by, 1, bh);
+    ctx.fillRect(bx + bw - 1, by, 1, bh);
+
+    const line1Col = tut.showTapHint
+      ? COLORS.textGold
+      : tut.stageIndex === 2
+        ? COLORS.textRed
+        : COLORS.textCyan;
+    this.drawPixelText(ctx, tut.promptLine1, CANVAS_WIDTH / 2, by + 5, line1Col, 1, 'center');
+    this.drawPixelText(ctx, tut.promptLine2, CANVAS_WIDTH / 2, by + 15, COLORS.textWhite, 1, 'center');
+  }
+
   private drawTopHud(ctx: CanvasRenderingContext2D, state: RenderState): void {
     // Solid HUD header strip (y: 0..38)
     ctx.fillStyle = '#090c18';
@@ -2064,13 +2192,26 @@ export class GameRenderer {
       curX += 9;
     }
 
-    // 3. Room Number
-    const roomStr = `RM ${String(Math.max(1, state.roomNumber)).padStart(2, '0')}`;
-    this.drawPixelText(ctx, roomStr, 132, 7, COLORS.textWhite, 1, 'center');
+    // 3. Room Number / Tutorial Stage
+    const isTut = Boolean(state.tutorial?.active);
+    const roomStr = isTut
+      ? `TUT ${state.tutorial!.stageIndex + 1}/${state.tutorial!.stageCount}`
+      : `RM ${String(Math.max(1, state.roomNumber)).padStart(2, '0')}`;
+    this.drawPixelText(
+      ctx,
+      roomStr,
+      isTut ? 124 : 132,
+      7,
+      isTut ? COLORS.textCyan : COLORS.textWhite,
+      1,
+      'center',
+    );
 
-    // 4. Score (placed left of top-right SFX button)
-    const scoreStr = String(Math.max(0, Math.floor(state.score)));
-    this.drawPixelText(ctx, scoreStr, 210, 7, COLORS.textGold, 1, 'right');
+    // 4. Score (hidden in tutorial to leave clean space for SKIP + SND buttons)
+    if (!isTut) {
+      const scoreStr = String(Math.max(0, Math.floor(state.score)));
+      this.drawPixelText(ctx, scoreStr, 210, 7, COLORS.textGold, 1, 'right');
+    }
 
     // --- Row 2 (y: 21..32) ---
     // 5. Active Weapon badge

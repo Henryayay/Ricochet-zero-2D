@@ -138,4 +138,5 @@ export const STORAGE_KEYS = {
   BEST_SCORE: 'ricochet_zero_best_score_v1',
   BEST_ROOM: 'ricochet_zero_best_room_v1',
   MUTED: 'ricochet_zero_muted_v1',
+  TUTORIAL_DONE: 'ricochet_zero_tutorial_done_v1',
 } as const;

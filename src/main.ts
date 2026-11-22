@@ -111,8 +111,13 @@ canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
 function renderMuteBar(): string {
   const label = engine.audio.isMuted() ? 'SND: OFF' : 'SND: ON';
+  const skipBtn =
+    engine.isTutorialActive() && engine.phase === 'playing'
+      ? `<button id="btn-skip-tutorial" class="pixel-btn-mini skip ui-interactive" type="button">SKIP</button>`
+      : '';
   return `
     <div class="hud-top-actions">
+      ${skipBtn}
       <button id="btn-mute" class="pixel-btn-mini ui-interactive" type="button">${label}</button>
     </div>
   `;
@@ -148,8 +153,9 @@ function renderTitleOverlay(): string {
         <div class="weapon-select-row">${chips}</div>
       </div>
 
-      <div style="width:100%;max-width:340px;">
+      <div class="title-actions">
         <button id="btn-start" class="pixel-cta" type="button">DROP IN</button>
+        <button id="btn-tutorial" class="pixel-cta secondary" type="button">TUTORIAL</button>
       </div>
     </div>
   `;
@@ -252,6 +258,13 @@ function renderUI(phase: GamePhase): void {
     engine.toggleMute();
   });
 
+  const skipTutBtn = document.getElementById('btn-skip-tutorial');
+  skipTutBtn?.addEventListener('pointerdown', (e) => e.stopPropagation());
+  skipTutBtn?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    engine.skipTutorial();
+  });
+
   if (phase === 'title') {
     document.querySelectorAll<HTMLButtonElement>('[data-weapon]').forEach((btn) => {
       btn.addEventListener('click', () => {
@@ -261,7 +274,20 @@ function renderUI(phase: GamePhase): void {
       });
     });
     document.getElementById('btn-start')?.addEventListener('click', () => {
-      engine.startNewRun();
+      if (!engine.isTutorialCompleted()) {
+        engine.startTutorial({
+          returnToTitle: false,
+          postWeapon: engine.getStartingWeapon(),
+        });
+      } else {
+        engine.startNewRun();
+      }
+    });
+    document.getElementById('btn-tutorial')?.addEventListener('click', () => {
+      engine.startTutorial({
+        returnToTitle: true,
+        postWeapon: engine.getStartingWeapon(),
+      });
     });
   } else if (phase === 'draft') {
     document.querySelectorAll<HTMLButtonElement>('[data-draft-idx]').forEach((btn) => {

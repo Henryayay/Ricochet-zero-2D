@@ -2184,4 +2184,129 @@ describe('Ricochet Zero Core Systems', () => {
       expect(seenPerks.size).toBeGreaterThanOrEqual(8);
     });
   });
+
+  describe('Interactive First-Time Tutorial', () => {
+    it('locks to railgun, disables overheat, and resets drill instead of gameover on damage', () => {
+      const engine = new GameEngine();
+      engine.startTutorial({ returnToTitle: false, postWeapon: 'sawblade' });
+
+      expect(engine.phase).toBe('playing');
+      expect(engine.isTutorialActive()).toBe(true);
+      expect(engine.getTutorialStageIndex()).toBe(0);
+      expect(engine.player.weapon).toBe('railgun');
+      expect(engine.enemies).toHaveLength(2);
+      expect(engine.getRenderState().tutorial?.active).toBe(true);
+
+      // Advance past Overheat threshold: overheat must not trigger or damage player
+      engine.roomTimer = OVERHEAT.OVERHEAT_START_SEC + 5;
+      engine.player.x = ARENA.right - engine.player.radius - 1;
+      engine.player.vx = 220;
+      engine.player.armored = true;
+      engine.stepSimulation(PHYSICS.FIXED_DT);
+      expect(engine.phase).toBe('playing');
+      expect(engine.player.hp).toBe(engine.player.maxHp);
+      expect(engine.player.shield).toBe(engine.player.maxShield);
+
+      // Simulate unarmored collision with enemy: auto-heals & resets Drill 1 instead of Game Over
+      engine.player.hp = 1;
+      engine.player.shield = 0;
+      engine.player.armored = false;
+      engine.player.vx = 0;
+      engine.player.vy = 0;
+      engine.player.x = engine.enemies[0].x;
+      engine.player.y = engine.enemies[0].y;
+      engine.stepSimulation(PHYSICS.FIXED_DT);
+
+      expect(engine.phase).toBe('playing');
+      expect(engine.isTutorialActive()).toBe(true);
+      expect(engine.getTutorialStageIndex()).toBe(0);
+      expect(engine.player.hp).toBe(engine.player.maxHp);
+      expect(engine.player.shield).toBe(engine.player.maxShield);
+      expect(engine.enemies).toHaveLength(2);
+    });
+
+    it('enforces skill gates across all 3 drills and launches Room 1 with selected starter weapon', () => {
+      const engine = new GameEngine();
+      engine.startTutorial({ returnToTitle: false, postWeapon: 'shotgun' });
+
+      // Drill 1: Clearing without ramming resets Drill 1
+      for (const e of engine.enemies) e.hp = 0;
+      engine.stepSimulation(PHYSICS.FIXED_DT);
+      expect(engine.getTutorialStageIndex()).toBe(0);
+      expect(engine.enemies).toHaveLength(2);
+
+      // Drill 1: Armored ramming advances to Drill 2
+      engine.player.armored = true;
+      engine.player.vx = 280;
+      engine.player.vy = 0;
+      for (const e of engine.enemies) {
+        engine.player.x = e.x;
+        engine.player.y = e.y;
+        engine.stepSimulation(PHYSICS.FIXED_DT);
+      }
+      expect(engine.getTutorialStageIndex()).toBe(1);
+      expect(engine.enemies).toHaveLength(1);
+
+      // Drill 2: Killing slime without charged Brake-Tap resets Drill 2
+      engine.enemies[0].hp = 0;
+      engine.stepSimulation(PHYSICS.FIXED_DT);
+      expect(engine.getTutorialStageIndex()).toBe(1);
+      expect(engine.enemies).toHaveLength(1);
+
+      // Drill 2: Bounce wall to reach chargeTier >= 1, then quick-tap to brake & fire Railgun
+      engine.player.x = ARENA.right - engine.player.radius - 1;
+      engine.player.y = engine.enemies[0].y;
+      engine.player.vx = 300;
+      engine.player.vy = 0;
+      engine.player.armored = true;
+      engine.stepSimulation(PHYSICS.FIXED_DT); // hits right wall -> chargeTier = 1, aims left toward slime
+      expect(engine.player.chargeTier).toBeGreaterThanOrEqual(1);
+
+      triggerQuickTap(engine, 135, 380);
+      engine.stepSimulation(PHYSICS.FIXED_DT);
+      expect(engine.getTutorialStageIndex()).toBe(2);
+      expect(engine.enemies).toHaveLength(1);
+      expect(engine.enemies[0].kind).toBe('drone');
+
+      // Drill 3: Killing drone without 0.2x slow-mo resets Drill 3
+      engine.enemies[0].hp = 0;
+      engine.stepSimulation(PHYSICS.FIXED_DT);
+      expect(engine.getTutorialStageIndex()).toBe(2);
+      expect(engine.enemies).toHaveLength(1);
+
+      // Drill 3: Trigger 0.2x slow-mo drag, then defeat drone -> completes tutorial & launches Room 1 with Shotgun
+      engine.handlePointerDown(135, 400, 1, 1000);
+      engine.handlePointerMove(135, 430, 1);
+      expect(engine.getRenderState().aim.slowMoActive).toBe(true);
+      engine.handlePointerUp(135, 430, 1, 1200);
+      engine.enemies[0].hp = 0;
+      engine.stepSimulation(PHYSICS.FIXED_DT);
+
+      expect(engine.isTutorialActive()).toBe(false);
+      expect(engine.isTutorialCompleted()).toBe(true);
+      expect(engine.phase).toBe('playing');
+      expect(engine.roomNumber).toBe(1);
+      expect(engine.player.weapon).toBe('shotgun');
+    });
+
+    it('skipTutorial exits cleanly to Title when launched from Title and to Room 1 when launched via Drop In', () => {
+      const fromTitle = new GameEngine();
+      fromTitle.startTutorial({ returnToTitle: true, postWeapon: 'arccoil' });
+      expect(fromTitle.isTutorialActive()).toBe(true);
+      fromTitle.skipTutorial();
+      expect(fromTitle.isTutorialActive()).toBe(false);
+      expect(fromTitle.isTutorialCompleted()).toBe(true);
+      expect(fromTitle.phase).toBe('title');
+      expect(fromTitle.getStartingWeapon()).toBe('arccoil');
+
+      const fromDropIn = new GameEngine();
+      fromDropIn.startTutorial({ returnToTitle: false, postWeapon: 'sawblade' });
+      fromDropIn.skipTutorial();
+      expect(fromDropIn.isTutorialActive()).toBe(false);
+      expect(fromDropIn.isTutorialCompleted()).toBe(true);
+      expect(fromDropIn.phase).toBe('playing');
+      expect(fromDropIn.roomNumber).toBe(1);
+      expect(fromDropIn.player.weapon).toBe('sawblade');
+    });
+  });
 });

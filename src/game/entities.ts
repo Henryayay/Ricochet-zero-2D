@@ -104,6 +104,7 @@ export interface Enemy {
   telegraphAngle?: number;
   isFanShot?: boolean;
   spikePhaseParity?: number;
+  stationary?: boolean;
 }
 
 export interface Hazard {
