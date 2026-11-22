@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
+import { AudioEngine } from '../audio.ts';
 import {
   ARENA,
+  COLORS,
   COMBAT,
   CONTROLS,
   OVERHEAT,
@@ -10,12 +12,13 @@ import {
 import type { DraftOption, Enemy } from '../entities.ts';
 import { GameEngine } from '../engine.ts';
 import {
+  isBossFrontShieldHit,
   len,
   normalize,
   raycastArena,
   stepCircleArena,
 } from '../physics.ts';
-import { generateRoom } from '../rooms.ts';
+import { generateDraftOptions, generateRoom } from '../rooms.ts';
 
 function triggerQuickTap(
   engine: GameEngine,
@@ -788,6 +791,492 @@ describe('Ricochet Zero Core Systems', () => {
       engine.cancelActiveInput();
       expect(engine.getRenderState().aim.slowMoActive).toBe(false);
       expect(engine.getRenderState().aim.active).toBe(false);
+    });
+  });
+
+  describe('10. Music Tracks, Narrow Boss Shield, Weapon Upgrades & Transfers', () => {
+    it('narrows Boss front shield to 48 deg half-angle: deflects at 30 deg and passes with crit at 60 deg', () => {
+      expect(COMBAT.BOSS_SHIELD_HALF_ANGLE_RAD).toBeCloseTo((48 * Math.PI) / 180, 6);
+
+      const engine = new GameEngine();
+      engine.startNewRun('railgun');
+      engine.hazards = [];
+
+      const boss: Enemy = {
+        id: 10001,
+        kind: 'boss',
+        x: 135,
+        y: 160,
+        vx: 0,
+        vy: 0,
+        radius: 20,
+        hp: 20,
+        maxHp: 20,
+        hitFlash: 0,
+        slammedTimer: 0,
+        angle: Math.PI / 2,
+        stateTimer: 10,
+        bossPhase: 0,
+      };
+      engine.enemies = [boss];
+
+      // 30 deg from boss.angle: deflects (0 damage)
+      const angle30 = boss.angle + (30 * Math.PI) / 180;
+      const pos30X = boss.x + Math.cos(angle30) * 80;
+      const pos30Y = boss.y + Math.sin(angle30) * 80;
+      expect(isBossFrontShieldHit(boss, pos30X, pos30Y)).toBe(true);
+
+      const dir30 = normalize(boss.x - pos30X, boss.y - pos30Y);
+      engine.player.x = pos30X;
+      engine.player.y = pos30Y;
+      engine.player.vx = dir30.x * 260;
+      engine.player.vy = dir30.y * 260;
+      engine.player.aimDirX = dir30.x;
+      engine.player.aimDirY = dir30.y;
+      engine.player.armored = true;
+      engine.player.chargeTier = 0;
+
+      triggerQuickTap(engine, pos30X, pos30Y, 1, 1000, 50);
+      expect(boss.hp).toBe(20);
+      expect(engine.floatingTexts.some((ft) => ft.text === 'DEFLECT!')).toBe(true);
+
+      // 60 deg from boss.angle (previously deflected at 75 deg, now passes!): deals 2 + 1 crit = 3 damage
+      engine.floatingTexts = [];
+      const angle60 = boss.angle + (60 * Math.PI) / 180;
+      const pos60X = boss.x + Math.cos(angle60) * 80;
+      const pos60Y = boss.y + Math.sin(angle60) * 80;
+      expect(isBossFrontShieldHit(boss, pos60X, pos60Y)).toBe(false);
+
+      const dir60 = normalize(boss.x - pos60X, boss.y - pos60Y);
+      engine.player.x = pos60X;
+      engine.player.y = pos60Y;
+      engine.player.vx = dir60.x * 260;
+      engine.player.vy = dir60.y * 260;
+      engine.player.aimDirX = dir60.x;
+      engine.player.aimDirY = dir60.y;
+      engine.player.armored = true;
+      engine.player.chargeTier = 0;
+
+      triggerQuickTap(engine, pos60X, pos60Y, 2, 1200, 50);
+      expect(boss.hp).toBe(17);
+      expect(engine.floatingTexts.some((ft) => ft.text === 'CRIT -3!')).toBe(true);
+    });
+
+    it('selects distinct room tracks 0..3 for rooms 1..4 and boss track 4 for boss rooms safely in headless mode', () => {
+      const audio = new AudioEngine();
+      const getTrackIndex = () => (audio as unknown as { bgmTrackIndex: number }).bgmTrackIndex;
+
+      expect(() => {
+        audio.init();
+        audio.startMusic(1);
+
+        audio.setMusicTrack(1, false);
+        expect(getTrackIndex()).toBe(0);
+
+        audio.setMusicTrack(2, false);
+        expect(getTrackIndex()).toBe(1);
+
+        audio.setMusicTrack(3, false);
+        expect(getTrackIndex()).toBe(2);
+
+        audio.setMusicTrack(4, false);
+        expect(getTrackIndex()).toBe(3);
+
+        audio.setMusicTrack(5, true);
+        expect(getTrackIndex()).toBe(4);
+
+        audio.setMusicIntensity(2);
+        audio.stopMusic();
+      }).not.toThrow();
+    });
+
+    it('applies Railgun upgrades (rail_beams, rail_width, rail_bounce) and uses COLORS.playerBullet', () => {
+      // 1. rail_beams rank 2 spawns 3 beams; rail_width increases beam width & damage
+      const engine = new GameEngine();
+      engine.startNewRun('railgun');
+      engine.hazards = [];
+      const baseTarget: Enemy = {
+        id: 10101,
+        kind: 'slime',
+        x: 135,
+        y: 160,
+        vx: 0,
+        vy: 0,
+        radius: 10,
+        hp: 20,
+        maxHp: 20,
+        hitFlash: 0,
+        slammedTimer: 0,
+        angle: 0,
+        stateTimer: 10,
+      };
+      engine.enemies = [baseTarget];
+      engine.player.x = 135;
+      engine.player.y = 300;
+      engine.player.vx = 0;
+      engine.player.vy = -260;
+      engine.player.aimDirX = 0;
+      engine.player.aimDirY = -1;
+      engine.player.armored = true;
+      engine.player.chargeTier = 0;
+
+      triggerQuickTap(engine, 135, 300, 1, 1000, 50);
+      expect(engine.beams).toHaveLength(1);
+      const baseWidth = engine.beams[0].width;
+      const baseDamage = 20 - baseTarget.hp;
+      expect(engine.beams[0].color).toBe(COLORS.playerBullet);
+      expect(baseDamage).toBe(2);
+
+      // Now upgrade rail_beams: 2 and rail_width: 2
+      engine.beams = [];
+      baseTarget.hp = 20;
+      engine.player.weaponMods.rail_beams = 2;
+      engine.player.weaponMods.rail_width = 2;
+      engine.player.vx = 0;
+      engine.player.vy = -260;
+      engine.player.aimDirX = 0;
+      engine.player.aimDirY = -1;
+      engine.player.armored = true;
+      engine.player.chargeTier = 0;
+
+      triggerQuickTap(engine, 135, 300, 2, 1200, 50);
+      expect(engine.beams).toHaveLength(3);
+      for (const beam of engine.beams) {
+        expect(beam.color).toBe(COLORS.playerBullet);
+        expect(beam.width).toBeGreaterThan(baseWidth);
+      }
+      expect(20 - baseTarget.hp).toBeGreaterThan(baseDamage);
+
+      // 2. rail_bounce rank 1 reflects beam off wall (2 beam segments) and hits behind Boss shield
+      const bounceEngine = new GameEngine();
+      bounceEngine.startNewRun('railgun');
+      bounceEngine.hazards = [];
+      bounceEngine.player.weaponMods.rail_bounce = 1;
+
+      const boss: Enemy = {
+        id: 10102,
+        kind: 'boss',
+        x: 135,
+        y: 180,
+        vx: 0,
+        vy: 0,
+        radius: 20,
+        hp: 20,
+        maxHp: 20,
+        hitFlash: 0,
+        slammedTimer: 0,
+        angle: Math.PI / 2, // Shield faces downward (+y); rear is above (y < 180)
+        stateTimer: 10,
+        bossPhase: 0,
+      };
+      bounceEngine.enemies = [boss];
+
+      // Aim from (165, 120) toward top wall at (150, 40) -> segment 1 misses boss,
+      // reflects off top wall downward through (123.75, 180) into boss's unshielded rear
+      const dir = normalize(-15, -80);
+      bounceEngine.player.x = 165;
+      bounceEngine.player.y = 120;
+      bounceEngine.player.vx = dir.x * 260;
+      bounceEngine.player.vy = dir.y * 260;
+      bounceEngine.player.aimDirX = dir.x;
+      bounceEngine.player.aimDirY = dir.y;
+      bounceEngine.player.armored = true;
+      bounceEngine.player.chargeTier = 0;
+
+      triggerQuickTap(bounceEngine, 165, 120, 3, 1400, 50);
+      expect(bounceEngine.beams).toHaveLength(2);
+      expect(bounceEngine.beams[0].color).toBe(COLORS.playerBullet);
+      expect(bounceEngine.beams[1].color).toBe(COLORS.playerBullet);
+      expect(boss.hp).toBe(17); // 2 base + 1 rear weakspot crit
+      expect(bounceEngine.floatingTexts.some((ft) => ft.text === 'CRIT -3!')).toBe(true);
+    });
+
+    it('applies Shotgun upgrades (shot_pellets, shot_bounce, shot_caliber) with COLORS.playerBullet', () => {
+      const engine = new GameEngine();
+      engine.startNewRun('shotgun');
+      engine.hazards = [];
+      engine.enemies = [];
+
+      // Base tier 0: 5 pellets, damage 1
+      engine.player.x = 135;
+      engine.player.y = 260;
+      engine.player.vx = 0;
+      engine.player.vy = -260;
+      engine.player.aimDirX = 0;
+      engine.player.aimDirY = -1;
+      engine.player.armored = true;
+      engine.player.chargeTier = 0;
+
+      triggerQuickTap(engine, 135, 260, 1, 1000, 50);
+      expect(engine.projectiles).toHaveLength(5);
+      const baseDmg = engine.projectiles[0].damage;
+      expect(baseDmg).toBe(1);
+      expect(engine.projectiles.every((pr) => pr.color === COLORS.playerBullet)).toBe(true);
+
+      // Upgrade shot_pellets (+3/rank) & shot_caliber (+1 dmg/rank)
+      engine.projectiles = [];
+      engine.player.weaponMods.shot_pellets = 1;
+      engine.player.weaponMods.shot_caliber = 2;
+      engine.player.x = 135;
+      engine.player.y = 260;
+      engine.player.vx = 0;
+      engine.player.vy = -260;
+      engine.player.aimDirX = 0;
+      engine.player.aimDirY = -1;
+      engine.player.armored = true;
+      engine.player.chargeTier = 0;
+
+      triggerQuickTap(engine, 135, 260, 2, 1200, 50);
+      expect(engine.projectiles).toHaveLength(8);
+      expect(engine.projectiles[0].damage).toBeGreaterThan(baseDmg);
+      expect(engine.projectiles[0].damage).toBe(3);
+
+      // Upgrade shot_bounce rank 1: bounces once off arena wall (bouncesDone === 1) and despawns on 2nd wall hit
+      const bounceEngine = new GameEngine();
+      bounceEngine.startNewRun('shotgun');
+      bounceEngine.hazards = [];
+      bounceEngine.enemies = [
+        {
+          id: 10150,
+          kind: 'slime',
+          x: 230,
+          y: 440,
+          vx: 0,
+          vy: 0,
+          radius: 10,
+          hp: 10,
+          maxHp: 10,
+          hitFlash: 0,
+          slammedTimer: 0,
+          angle: 0,
+          stateTimer: 10,
+        },
+      ];
+      bounceEngine.player.weaponMods.shot_bounce = 1;
+
+      const cornerDir = normalize(-1, -1);
+      bounceEngine.player.x = 28;
+      bounceEngine.player.y = 85;
+      bounceEngine.player.vx = cornerDir.x * 260;
+      bounceEngine.player.vy = cornerDir.y * 260;
+      bounceEngine.player.aimDirX = cornerDir.x;
+      bounceEngine.player.aimDirY = cornerDir.y;
+      bounceEngine.player.armored = true;
+      bounceEngine.player.chargeTier = 0;
+
+      triggerQuickTap(bounceEngine, 28, 85, 3, 1400, 50);
+      expect(bounceEngine.projectiles.length).toBeGreaterThan(0);
+      expect(bounceEngine.projectiles.every((pr) => pr.color === COLORS.playerBullet)).toBe(true);
+
+      let sawFirstBounce = false;
+      for (let i = 0; i < 40; i++) {
+        bounceEngine.stepSimulation(PHYSICS.FIXED_DT);
+        if (bounceEngine.projectiles.some((pr) => pr.bouncesDone === 1)) {
+          sawFirstBounce = true;
+        }
+        if (bounceEngine.projectiles.length === 0) break;
+      }
+
+      expect(sawFirstBounce).toBe(true);
+      // All pellets hit a second wall within ~0.25s (< 0.41s life) and despawn
+      expect(bounceEngine.projectiles).toHaveLength(0);
+    });
+
+    it('applies Sawblade upgrades (saw_count, saw_bounce, saw_size)', () => {
+      const engine = new GameEngine();
+      engine.startNewRun('sawblade');
+      engine.hazards = [];
+      engine.enemies = [];
+
+      engine.player.x = 135;
+      engine.player.y = 260;
+      engine.player.vx = 0;
+      engine.player.vy = -260;
+      engine.player.aimDirX = 0;
+      engine.player.aimDirY = -1;
+      engine.player.armored = true;
+      engine.player.chargeTier = 0;
+
+      triggerQuickTap(engine, 135, 260, 1, 1000, 50);
+      expect(engine.sawblades).toHaveLength(1);
+      const baseBounces = engine.sawblades[0].bouncesLeft;
+      const baseRadius = engine.sawblades[0].radius;
+      const baseDamage = engine.sawblades[0].damage;
+
+      engine.sawblades = [];
+      engine.player.weaponMods.saw_count = 2;
+      engine.player.weaponMods.saw_bounce = 1;
+      engine.player.weaponMods.saw_size = 2;
+      engine.player.vx = 0;
+      engine.player.vy = -260;
+      engine.player.aimDirX = 0;
+      engine.player.aimDirY = -1;
+      engine.player.armored = true;
+      engine.player.chargeTier = 0;
+
+      triggerQuickTap(engine, 135, 260, 2, 1200, 50);
+      expect(engine.sawblades).toHaveLength(3);
+      for (const saw of engine.sawblades) {
+        expect(saw.bouncesLeft).toBeGreaterThan(baseBounces);
+        expect(saw.radius).toBeGreaterThan(baseRadius);
+        expect(saw.damage).toBeGreaterThan(baseDamage);
+      }
+    });
+
+    it('applies Arc Coil upgrades (arc_fork, arc_jumps, arc_overload)', () => {
+      // arc_fork rank 1 fires 2 arcs
+      const forkEngine = new GameEngine();
+      forkEngine.startNewRun('arccoil');
+      forkEngine.hazards = [];
+      forkEngine.enemies = [];
+      forkEngine.player.weaponMods.arc_fork = 1;
+      forkEngine.player.x = 135;
+      forkEngine.player.y = 260;
+      forkEngine.player.vx = 0;
+      forkEngine.player.vy = -260;
+      forkEngine.player.aimDirX = 0;
+      forkEngine.player.aimDirY = -1;
+      forkEngine.player.armored = true;
+      forkEngine.player.chargeTier = 0;
+
+      triggerQuickTap(forkEngine, 135, 260, 1, 1000, 50);
+      expect(forkEngine.arcs).toHaveLength(2);
+      expect(forkEngine.arcs.every((arc) => arc.color === COLORS.playerBullet)).toBe(true);
+
+      // arc_jumps increases chain jumps & arc_overload increases shock damage
+      const makeChainLine = (jumpsRank: number, overloadRank: number) => {
+        const engine = new GameEngine();
+        engine.startNewRun('arccoil');
+        engine.hazards = [];
+        engine.player.weaponMods.arc_jumps = jumpsRank;
+        engine.player.weaponMods.arc_overload = overloadRank;
+
+        const targets: Enemy[] = [0, 1, 2, 3].map((idx) => ({
+          id: 10200 + idx,
+          kind: 'slime',
+          x: 135,
+          y: 250 - idx * 50,
+          vx: 0,
+          vy: 0,
+          radius: 10,
+          hp: 20,
+          maxHp: 20,
+          hitFlash: 0,
+          slammedTimer: 0,
+          angle: 0,
+          stateTimer: 10,
+        }));
+        engine.enemies = targets;
+        engine.player.x = 135;
+        engine.player.y = 300;
+        engine.player.vx = 0;
+        engine.player.vy = -260;
+        engine.player.aimDirX = 0;
+        engine.player.aimDirY = -1;
+        engine.player.armored = true;
+        engine.player.chargeTier = 0;
+
+        triggerQuickTap(engine, 135, 300, 1, 1000, 50);
+        return targets;
+      };
+
+      const baseTargets = makeChainLine(0, 0);
+      // Base maxJumps = 2 at tier 0: hits first 2 enemies (primary=2, chain=1), skips 3rd & 4th
+      expect(20 - baseTargets[0].hp).toBe(2);
+      expect(20 - baseTargets[1].hp).toBe(1);
+      expect(20 - baseTargets[2].hp).toBe(0);
+      expect(20 - baseTargets[3].hp).toBe(0);
+
+      const upgradedTargets = makeChainLine(1, 2);
+      // arc_jumps rank 1 -> maxJumps = 4; arc_overload rank 2 -> primary=4, chain=3
+      expect(20 - upgradedTargets[0].hp).toBe(4);
+      expect(20 - upgradedTargets[1].hp).toBe(3);
+      expect(20 - upgradedTargets[2].hp).toBe(3);
+      expect(20 - upgradedTargets[3].hp).toBe(3);
+    });
+
+    it('enforces COMBAT.MAX_WEAPON_UPGRADES = 4 in generateDraftOptions', () => {
+      expect(COMBAT.MAX_WEAPON_UPGRADES).toBe(4);
+      const engine = new GameEngine();
+      engine.startNewRun('railgun');
+      engine.player.weaponUpgradeBudget = 4;
+
+      for (let i = 0; i < 20; i++) {
+        const options = generateDraftOptions(engine.player, 2);
+        expect(options).toHaveLength(3);
+        expect(options.some((opt) => opt.kind === 'weapon_mod')).toBe(false);
+      }
+    });
+
+    it('transfers weaponUpgradeBudget to new weapon mods step-by-step on weapon swap', () => {
+      const onDraftReady = vi.fn();
+      const engine = new GameEngine({ onDraftReady });
+      engine.startNewRun('railgun');
+
+      engine.player.weaponUpgradeBudget = 2;
+      engine.player.weaponMods.rail_beams = 1;
+      engine.player.weaponMods.rail_width = 1;
+
+      advanceRoomClearToDraft(engine);
+      expect(onDraftReady).toHaveBeenCalledTimes(1);
+
+      // Swap from railgun to shotgun
+      engine.selectDraftOption({
+        id: 'weapon_shotgun',
+        kind: 'weapon',
+        weaponId: 'shotgun',
+        title: 'Equip: Recoil Shotgun',
+        description: 'Wide pellet blast forward; kicks you sharply backward.',
+      });
+
+      expect(engine.phase).toBe('draft');
+      expect(engine.player.weapon).toBe('shotgun');
+      expect(Object.values(engine.player.weaponMods).every((rank) => rank === 0)).toBe(true);
+
+      expect(onDraftReady).toHaveBeenCalledTimes(2);
+      const [transferOpts1, , transferRem1, transferWeapon1] = onDraftReady.mock.calls[1] as [
+        DraftOption[],
+        number,
+        number,
+        string,
+      ];
+      expect(transferRem1).toBe(2);
+      expect(transferWeapon1).toBe('shotgun');
+      expect(transferOpts1.length).toBeGreaterThanOrEqual(2);
+      expect(
+        transferOpts1.every((opt) => opt.kind === 'weapon_mod' && opt.weaponId === 'shotgun'),
+      ).toBe(true);
+
+      // Pick first shotgun mod -> transferRemaining === 1, still in draft
+      const mod1 = transferOpts1.find((opt) => opt.weaponModId === 'shot_pellets')!;
+      expect(mod1).toBeDefined();
+      engine.selectDraftOption(mod1);
+
+      expect(engine.phase).toBe('draft');
+      expect(onDraftReady).toHaveBeenCalledTimes(3);
+      const [transferOpts2, , transferRem2, transferWeapon2] = onDraftReady.mock.calls[2] as [
+        DraftOption[],
+        number,
+        number,
+        string,
+      ];
+      expect(transferRem2).toBe(1);
+      expect(transferWeapon2).toBe('shotgun');
+      expect(
+        transferOpts2.every((opt) => opt.kind === 'weapon_mod' && opt.weaponId === 'shotgun'),
+      ).toBe(true);
+
+      // Pick second shotgun mod -> advances to room 2 with budget preserved and both mods active
+      const mod2 = transferOpts2.find((opt) => opt.weaponModId === 'shot_bounce')!;
+      expect(mod2).toBeDefined();
+      engine.selectDraftOption(mod2);
+
+      expect(engine.phase).toBe('playing');
+      expect(engine.roomNumber).toBe(2);
+      expect(engine.player.weapon).toBe('shotgun');
+      expect(engine.player.weaponUpgradeBudget).toBe(2);
+      expect(engine.player.weaponMods.shot_pellets).toBe(1);
+      expect(engine.player.weaponMods.shot_bounce).toBe(1);
     });
   });
 });

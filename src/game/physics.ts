@@ -1,4 +1,4 @@
-import { ARENA, PHYSICS } from './constants';
+import { ARENA, COMBAT, PHYSICS } from './constants';
 import type { Enemy, Vec2 } from './entities';
 
 export function clamp(v: number, min: number, max: number): number {
@@ -47,7 +47,7 @@ export function isBossFrontShieldHit(
   attackOriginY: number,
 ): boolean {
   const incomingAngle = Math.atan2(attackOriginY - boss.y, attackOriginX - boss.x);
-  return Math.abs(angleDiff(incomingAngle, boss.angle)) <= (75 * Math.PI) / 180;
+  return Math.abs(angleDiff(incomingAngle, boss.angle)) <= COMBAT.BOSS_SHIELD_HALF_ANGLE_RAD;
 }
 
 export function raycastArena(

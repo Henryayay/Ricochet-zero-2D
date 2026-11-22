@@ -479,10 +479,24 @@ export class GameRenderer {
     // 3. Dungeon border walls & overheat state
     this.drawDungeonWalls(ctx, state);
 
-    // 4. Slow-mo focus vignette inside arena
-    if (state.aim.active && state.aim.slowMoActive) {
-      ctx.fillStyle = 'rgba(44, 245, 255, 0.05)';
+    // 4. Prominent Slow-Mo time-dilation overlay inside arena
+    if (state.phase === 'playing' && state.aim.slowMoActive) {
+      ctx.fillStyle = 'rgba(8, 18, 44, 0.45)';
       ctx.fillRect(ARENA.left, ARENA.top, ARENA.width, ARENA.height);
+
+      // Subtle horizontal CRT / time-dilation scanlines every 4px
+      ctx.fillStyle = 'rgba(44, 245, 255, 0.06)';
+      for (let y = ARENA.top; y < ARENA.bottom; y += 4) {
+        ctx.fillRect(ARENA.left, y, ARENA.width, 1);
+      }
+
+      // Crisp 1px pulsing cyan inner border around ARENA
+      const borderAlpha = 0.55 + 0.45 * Math.sin(state.time * 16);
+      ctx.fillStyle = `rgba(44, 245, 255, ${borderAlpha.toFixed(3)})`;
+      ctx.fillRect(ARENA.left, ARENA.top, ARENA.width, 1);
+      ctx.fillRect(ARENA.left, ARENA.bottom - 1, ARENA.width, 1);
+      ctx.fillRect(ARENA.left, ARENA.top, 1, ARENA.height);
+      ctx.fillRect(ARENA.right - 1, ARENA.top, 1, ARENA.height);
     }
 
     // Clip gameplay entities cleanly inside the arena (with slight wall overlap allowance)
@@ -1097,12 +1111,50 @@ export class GameRenderer {
     const r = Math.round(boss.radius);
     const flashWhite = boss.hitFlash > 0;
     const pulse = 0.5 + 0.5 * Math.sin(time * 9);
+    const shieldSpan = COMBAT.BOSS_SHIELD_HALF_ANGLE_RAD;
 
-    // 1. Rear weak spot glow opposite boss.angle
+    // 1. Wide exposed magenta rear/flank weakspot glow (264-degree unshielded arc)
+    const flankStart = boss.angle + shieldSpan + 0.08;
+    const flankEnd = boss.angle + Math.PI * 2 - shieldSpan - 0.08;
+    const exposedSteps = 32;
+    const weakRimR = r + 2;
+    for (let i = 0; i <= exposedSteps; i++) {
+      const ang = flankStart + (i / exposedSteps) * (flankEnd - flankStart);
+      const wx = Math.round(bx + Math.cos(ang) * weakRimR);
+      const wy = Math.round(by + Math.sin(ang) * weakRimR);
+      ctx.fillStyle = '#07080f';
+      ctx.fillRect(wx - 2, wy - 2, 4, 4);
+      ctx.fillStyle = i % 2 === 0 || pulse > 0.5 ? COLORS.bossCore : '#b01c61';
+      ctx.fillRect(wx - 1, wy - 1, 2, 2);
+      if (i % 4 === 0 && pulse > 0.45) {
+        ctx.fillStyle = '#ffa6cf';
+        ctx.fillRect(wx, wy, 1, 1);
+      }
+    }
+
+    // Exposed flank weakspot nodes (~108° off-axis on both sides)
+    for (const side of [-1, 1] as const) {
+      const flankAngle = boss.angle + side * Math.PI * 0.6;
+      const fx = bx + Math.cos(flankAngle) * (r - 1);
+      const fy = by + Math.sin(flankAngle) * (r - 1);
+      const flankR = pulse > 0.5 ? 6 : 5;
+      this.drawPixelCircleFill(ctx, fx, fy, flankR + 1, '#07080f');
+      this.drawPixelCircleFill(ctx, fx, fy, flankR, '#8c1248');
+      this.drawPixelCircleFill(ctx, fx, fy, Math.max(3, flankR - 2), COLORS.bossCore);
+      this.drawPixelCircleFill(
+        ctx,
+        fx,
+        fy,
+        2,
+        pulse > 0.6 ? '#ffffff' : '#ffa6cf',
+      );
+    }
+
+    // Main rear weak spot glow opposite boss.angle
     const rearAngle = boss.angle + Math.PI;
     const rearX = bx + Math.cos(rearAngle) * (r - 2);
     const rearY = by + Math.sin(rearAngle) * (r - 2);
-    const rearGlowR = pulse > 0.5 ? 9 : 7;
+    const rearGlowR = pulse > 0.5 ? 10 : 8;
     this.drawPixelCircleFill(ctx, rearX, rearY, rearGlowR + 1, '#07080f');
     this.drawPixelCircleFill(ctx, rearX, rearY, rearGlowR, '#8c1248');
     this.drawPixelCircleFill(
@@ -1162,11 +1214,10 @@ export class GameRenderer {
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(bx - 1, by - 1, 2, 2);
 
-    // 3. Thick glowing FRONTAL SHIELD ARC along boss.angle
-    const shieldSpan = (75 * Math.PI) / 180; // Exact 150-degree frontal shield arc matching hitbox
+    // 3. Narrower glowing FRONTAL SHIELD ARC along boss.angle (48° half-angle, 96° total)
     const shieldInner = r + 1;
     const shieldOuter = r + 6;
-    const steps = 26;
+    const steps = 18;
     for (let i = 0; i <= steps; i++) {
       const frac = i / steps;
       const ang = boss.angle - shieldSpan + frac * shieldSpan * 2;
@@ -1180,7 +1231,7 @@ export class GameRenderer {
       ctx.fillRect(ox - 2, oy - 2, 4, 4);
 
       // Metallic segmented plates (small visual bevel every few steps)
-      const isSeam = i % 5 === 0;
+      const isSeam = i % 4 === 0 || i === steps;
       const midR = (shieldInner + shieldOuter) * 0.5;
       const sx = Math.round(bx + cos * midR);
       const sy = Math.round(by + sin * midR);
@@ -1198,12 +1249,20 @@ export class GameRenderer {
       ctx.fillRect(hx - 1, hy - 1, 2, 2);
     }
 
-    // 4. Tiny pulsing chevron indicator behind weak spot
+    // 4. Pulsing chevron indicators pointing to exposed rear & flank weakspots
     const markerDist = r + 11 + Math.round(pulse * 2);
     const mx = Math.round(bx + Math.cos(rearAngle) * markerDist);
     const my = Math.round(by + Math.sin(rearAngle) * markerDist);
     ctx.fillStyle = pulse > 0.5 ? '#ffffff' : COLORS.bossCore;
     ctx.fillRect(mx - 1, my - 1, 3, 3);
+
+    for (const side of [-1, 1] as const) {
+      const flankAngle = boss.angle + side * Math.PI * 0.6;
+      const fmx = Math.round(bx + Math.cos(flankAngle) * (markerDist - 2));
+      const fmy = Math.round(by + Math.sin(flankAngle) * (markerDist - 2));
+      ctx.fillStyle = pulse > 0.5 ? '#ffa6cf' : COLORS.bossCore;
+      ctx.fillRect(fmx - 1, fmy - 1, 2, 2);
+    }
   }
 
   private drawBossHpBar(
@@ -1390,9 +1449,11 @@ export class GameRenderer {
             ? COLORS.wallOverheat
             : '#ff8a96';
 
-    const ringRadius = Math.round(14 + focus * 5);
+    const ringRadius = Math.round(
+      aim.slowMoActive ? 17 + focus * 6 : 14 + focus * 5,
+    );
     const segments = 24;
-    const activeSegs = Math.max(1, Math.round(focus * segments));
+    const activeSegs = focus <= 0.001 ? 0 : Math.max(1, Math.round(focus * segments));
 
     // Faint background ring track
     this.drawPixelCircleStroke(
@@ -1400,11 +1461,40 @@ export class GameRenderer {
       px,
       py,
       ringRadius,
-      'rgba(127, 139, 176, 0.22)',
+      aim.slowMoActive ? 'rgba(44, 245, 255, 0.25)' : 'rgba(127, 139, 176, 0.22)',
       1,
     );
 
-    // Active Focus arc pixels (crisp 2x2 segments)
+    // Subtle secondary inner pulse ring during Slow-Mo
+    if (aim.slowMoActive) {
+      const pulseStep = Math.sin(time * 18) > 0 ? 1 : 0;
+      const innerR = Math.max(10, ringRadius - 4 - pulseStep);
+      const innerAlpha = 0.22 + 0.16 * (0.5 + 0.5 * Math.sin(time * 18));
+      this.drawPixelCircleStroke(
+        ctx,
+        px,
+        py,
+        innerR,
+        `rgba(44, 245, 255, ${innerAlpha.toFixed(3)})`,
+        1,
+      );
+    }
+
+    // Active Focus arc pixels (bold 3x3 / 2x2 segments when slowMoActive)
+    if (aim.slowMoActive) {
+      ctx.fillStyle = '#07080f';
+      for (let i = 0; i < activeSegs; i++) {
+        const a0 = -Math.PI / 2 + (i / segments) * Math.PI * 2;
+        const a1 = -Math.PI / 2 + ((i + 0.65) / segments) * Math.PI * 2;
+        const x0 = Math.round(px + Math.cos(a0) * ringRadius);
+        const y0 = Math.round(py + Math.sin(a0) * ringRadius);
+        const x1 = Math.round(px + Math.cos(a1) * ringRadius);
+        const y1 = Math.round(py + Math.sin(a1) * ringRadius);
+        ctx.fillRect(x0 - 2, y0 - 2, 4, 4);
+        ctx.fillRect(x1 - 1, y1 - 1, 3, 3);
+      }
+    }
+
     ctx.fillStyle = focusColor;
     for (let i = 0; i < activeSegs; i++) {
       const a0 = -Math.PI / 2 + (i / segments) * Math.PI * 2;
@@ -1413,8 +1503,23 @@ export class GameRenderer {
       const y0 = Math.round(py + Math.sin(a0) * ringRadius);
       const x1 = Math.round(px + Math.cos(a1) * ringRadius);
       const y1 = Math.round(py + Math.sin(a1) * ringRadius);
-      ctx.fillRect(x0 - 1, y0 - 1, 2, 2);
-      ctx.fillRect(x1 - 1, y1 - 1, 2, 2);
+      if (aim.slowMoActive) {
+        ctx.fillRect(x0 - 1, y0 - 1, 3, 3);
+        ctx.fillRect(x1 - 1, y1 - 1, 2, 2);
+      } else {
+        ctx.fillRect(x0 - 1, y0 - 1, 2, 2);
+        ctx.fillRect(x1 - 1, y1 - 1, 2, 2);
+      }
+    }
+
+    // Crisp 0.2x pixel tag just below/above the Focus Ring while slow-mo is active
+    if (aim.slowMoActive) {
+      const tagX = clamp(Math.round(px), ARENA.left + 12, ARENA.right - 12);
+      const tagY =
+        py + ringRadius + 10 < ARENA.bottom - 2
+          ? Math.round(py + ringRadius + 4)
+          : Math.round(py - ringRadius - 9);
+      this.drawPixelText(ctx, '0.2x', tagX, tagY, COLORS.textCyan, 1, 'center');
     }
 
     // 2. Dotted raycast trajectory preview along aim.previewPoints
@@ -1531,22 +1636,22 @@ export class GameRenderer {
     const sy = Math.round(blade.y);
     const r = Math.max(4, Math.round(blade.radius));
 
-    // Spinning pixel teeth around perimeter
+    // Spinning pixel teeth around perimeter (player ordnance volt-yellow-lime palette)
     const teeth = 6;
     for (let i = 0; i < teeth; i++) {
       const ang = blade.spin + (i * Math.PI * 2) / teeth;
       const tx = Math.round(sx + Math.cos(ang) * (r + 2));
       const ty = Math.round(sy + Math.sin(ang) * (r + 2));
-      ctx.fillStyle = '#07080f';
+      ctx.fillStyle = '#0d1a04';
       ctx.fillRect(tx - 1, ty - 1, 3, 3);
-      ctx.fillStyle = '#ffffff';
+      ctx.fillStyle = COLORS.playerBullet;
       ctx.fillRect(tx, ty, 2, 2);
     }
 
-    this.drawPixelCircleFill(ctx, sx, sy, r + 1, '#07080f');
-    this.drawPixelCircleFill(ctx, sx, sy, r, '#97a8cc');
-    this.drawPixelCircleFill(ctx, sx, sy, Math.max(2, r - 2), COLORS.textCyan);
-    ctx.fillStyle = '#ffffff';
+    this.drawPixelCircleFill(ctx, sx, sy, r + 1, '#0d1a04');
+    this.drawPixelCircleFill(ctx, sx, sy, r, COLORS.playerBulletRim);
+    this.drawPixelCircleFill(ctx, sx, sy, Math.max(2, r - 2), COLORS.playerBullet);
+    ctx.fillStyle = COLORS.playerBulletCore;
     ctx.fillRect(sx - 1, sy - 1, 2, 2);
   }
 
@@ -1558,14 +1663,42 @@ export class GameRenderer {
     const py = Math.round(p.y);
     const r = Math.max(2, Math.round(p.radius));
 
-    // Dark outline so projectiles always pop cleanly
-    this.drawPixelCircleFill(ctx, px, py, r + 1, '#07080f');
-
     if (p.fromPlayer) {
-      this.drawPixelCircleFill(ctx, px, py, r, p.color || COLORS.textCyan);
-      this.drawPixelCircleFill(ctx, px, py, Math.max(1, r - 1), '#ffffff');
+      // Short 4px velocity trail tail behind player pellets
+      const speed = Math.hypot(p.vx, p.vy);
+      if (speed > 1) {
+        const ux = p.vx / speed;
+        const uy = p.vy / speed;
+        const tailStart = Math.max(1, r - 1);
+        const tailEnd = tailStart + 4;
+        this.drawPixelLine(
+          ctx,
+          p.x - ux * tailStart,
+          p.y - uy * tailStart,
+          p.x - ux * tailEnd,
+          p.y - uy * tailEnd,
+          COLORS.playerBulletRim,
+          2,
+        );
+        this.drawPixelLine(
+          ctx,
+          p.x - ux * tailStart,
+          p.y - uy * tailStart,
+          p.x - ux * (tailStart + 2),
+          p.y - uy * (tailStart + 2),
+          COLORS.playerBullet,
+          1,
+        );
+      }
+
+      // Signature friendly ordnance: dark outline + volt-yellow-lime body + white-hot center
+      this.drawPixelCircleFill(ctx, px, py, r + 1, '#0d1a04');
+      this.drawPixelCircleFill(ctx, px, py, r, COLORS.playerBullet);
+      ctx.fillStyle = COLORS.playerBulletCore;
+      ctx.fillRect(px, py, 1, 1);
     } else {
-      // Red Means Dead: bright red rim + high-contrast pale core
+      // Red Means Dead: dark outline + bright red rim + high-contrast pale core
+      this.drawPixelCircleFill(ctx, px, py, r + 1, '#07080f');
       this.drawPixelCircleFill(ctx, px, py, r, COLORS.bulletRed);
       this.drawPixelCircleFill(
         ctx,

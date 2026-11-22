@@ -1,5 +1,19 @@
 export type WeaponId = 'railgun' | 'shotgun' | 'sawblade' | 'arccoil';
 
+export type WeaponModId =
+  | 'rail_beams'
+  | 'rail_width'
+  | 'rail_bounce'
+  | 'shot_pellets'
+  | 'shot_bounce'
+  | 'shot_caliber'
+  | 'saw_count'
+  | 'saw_bounce'
+  | 'saw_size'
+  | 'arc_jumps'
+  | 'arc_fork'
+  | 'arc_overload';
+
 export type PerkId =
   | 'preview_bounce'
   | 'explosive_slam'
@@ -43,6 +57,9 @@ export interface PlayerState {
   chargeTier: number;
   armored: boolean;
   weapon: WeaponId;
+  weaponMods: Record<WeaponModId, number>;
+  /** Total weapon upgrade points earned across the run (capped at COMBAT.MAX_WEAPON_UPGRADES) */
+  weaponUpgradeBudget: number;
   perks: Record<PerkId, number>;
   trail: TrailPoint[];
   flashTimer: number;
@@ -97,6 +114,8 @@ export interface Projectile {
   color: string;
   knockback?: number;
   fromCharge?: boolean;
+  bouncesLeft?: number;
+  bouncesDone?: number;
 }
 
 export interface Sawblade {
@@ -166,11 +185,13 @@ export interface FloatingText {
 
 export interface DraftOption {
   id: string;
-  kind: 'weapon' | 'perk';
+  kind: 'weapon' | 'weapon_mod' | 'perk';
   weaponId?: WeaponId;
+  weaponModId?: WeaponModId;
   perkId?: PerkId;
   title: string;
   description: string;
+  rankLabel?: string;
 }
 
 export function createInitialPerks(): Record<PerkId, number> {
@@ -181,6 +202,23 @@ export function createInitialPerks(): Record<PerkId, number> {
     longer_focus: 0,
     max_shield: 0,
     bounce_speed: 0,
+  };
+}
+
+export function createInitialWeaponMods(): Record<WeaponModId, number> {
+  return {
+    rail_beams: 0,
+    rail_width: 0,
+    rail_bounce: 0,
+    shot_pellets: 0,
+    shot_bounce: 0,
+    shot_caliber: 0,
+    saw_count: 0,
+    saw_bounce: 0,
+    saw_size: 0,
+    arc_jumps: 0,
+    arc_fork: 0,
+    arc_overload: 0,
   };
 }
 

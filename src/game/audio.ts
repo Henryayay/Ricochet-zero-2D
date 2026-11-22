@@ -3,10 +3,8 @@ import type { WeaponId } from './entities.ts';
 const MASTER_GAIN = 0.35;
 const BGM_GAIN = 0.42;
 const DEFAULT_FILTER_FREQ = 18000;
-const SLOW_MO_FILTER_FREQ = 700;
+const SLOW_MO_FILTER_FREQ = 480;
 
-const BGM_BPM = 136;
-const BGM_STEP_SEC = 60 / BGM_BPM / 4; // 16th-note step (~0.1103s)
 const BGM_LOOKAHEAD_SEC = 0.14;
 const BGM_SCHEDULER_MS = 25;
 
@@ -15,40 +13,238 @@ function midiHz(midi: number): number {
   return 440 * Math.pow(2, (midi - 69) / 12);
 }
 
-// 4-bar (64-step) E-minor / Dorian groovy synthwave progression:
-// Bar 1: Em | Bar 2: G -> D | Bar 3: C | Bar 4: D -> B7
-// Funky octave-jumping slap bassline (MIDI notes, 0 = rest)
-const BASS_PATTERN: readonly number[] = [
-  // Bar 1 (Em: E2=40, E3=52, G2=43, D2=38)
-  40, 0, 52, 40,  0, 40, 52, 0,   40, 43, 52, 40,  0, 52, 43, 38,
-  // Bar 2 (G -> D: G2=43, G3=55, D2=38, D3=50, F#2=42)
-  43, 0, 55, 43,  0, 43, 55, 0,   38, 0, 50, 38,   42, 0, 50, 42,
-  // Bar 3 (C: C2=36, C3=48, E2=40, G2=43)
-  36, 0, 48, 36,  0, 36, 48, 0,   36, 40, 48, 43,  0, 48, 43, 40,
-  // Bar 4 (D -> B7: D2=38, D3=50, B1=35, B2=47, F#2=42, A2=45)
-  38, 0, 50, 38,  0, 38, 50, 38,  35, 0, 47, 35,   42, 45, 47, 50,
-];
+export const MUSIC_TRACK_NAMES = [
+  'SECTOR PULSE',
+  'CYBER FUNK',
+  'NEON DRIFT',
+  'HYPER GRID',
+  'CORE OVERDRIVE',
+] as const;
 
-// Syncopated arcade hook lead melody (MIDI notes, 0 = rest)
-const LEAD_PATTERN: readonly number[] = [
-  // Bar 1 (Em hook: E4=64, G4=67, A4=69, B4=71, D5=74)
-  64, 0, 67, 0,   71, 0, 69, 67,  0, 64, 67, 0,   74, 0, 71, 69,
-  // Bar 2 (G -> D: G4=67, B4=71, D5=74, A4=69, F#4=66)
-  67, 0, 71, 0,   74, 0, 71, 69,  0, 66, 69, 0,   74, 71, 69, 66,
-  // Bar 3 (C lift: E4=64, G4=67, C5=72, B4=71, E5=76)
-  64, 0, 67, 72,  0, 71, 67, 0,   72, 0, 76, 0,   74, 72, 71, 67,
-  // Bar 4 (D -> B7 tension: A4=69, F#4=66, B4=71, D#5=75, E5=76)
-  69, 0, 74, 0,   71, 69, 66, 0,  71, 0, 75, 0,   76, 0, 75, 71,
-];
+interface MusicTrack {
+  readonly name: (typeof MUSIC_TRACK_NAMES)[number];
+  readonly bpm: number;
+  readonly swing: number;
+  readonly bassType: 'slap' | 'funk' | 'outrun' | 'acid' | 'overdrive';
+  readonly leadType: 'square' | 'pulse' | 'detuned';
+  readonly arpType: OscillatorType;
+  readonly drumStyle: 'synthwave' | 'electrofunk' | 'outrun' | 'breakbeat' | 'boss';
+  readonly bass: readonly number[];
+  readonly lead: readonly number[];
+  readonly arpChords: readonly (readonly [number, number, number])[];
+}
 
-// 3-note chord arpeggios per bar (Em, G/D, C, D/B7)
-const ARP_CHORDS: readonly (readonly [number, number, number])[] = [
-  [52, 55, 59], // Bar 1: Em (E3, G3, B3)
-  [55, 59, 62], // Bar 2a: G (G3, B3, D4)
-  [50, 54, 57], // Bar 2b: D (D3, F#3, A3)
-  [48, 52, 55], // Bar 3: C (C3, E3, G3)
-  [50, 54, 57], // Bar 4a: D (D3, F#3, A3)
-  [47, 51, 54], // Bar 4b: B7/B (B2, D#3, F#3)
+// Track 0: SECTOR PULSE (136 BPM, E minor) — Em -> G/D -> C -> D/B7 slap-bass synthwave
+const TRACK_SECTOR_PULSE: MusicTrack = {
+  name: 'SECTOR PULSE',
+  bpm: 136,
+  swing: 0.09,
+  bassType: 'slap',
+  leadType: 'square',
+  arpType: 'square',
+  drumStyle: 'synthwave',
+  bass: [
+    // Bar 1 (Em: E2=40, E3=52, G2=43, D2=38)
+    40, 0, 52, 40,  0, 40, 52, 0,   40, 43, 52, 40,  0, 52, 43, 38,
+    // Bar 2 (G -> D: G2=43, G3=55, D2=38, D3=50, F#2=42)
+    43, 0, 55, 43,  0, 43, 55, 0,   38, 0, 50, 38,   42, 0, 50, 42,
+    // Bar 3 (C: C2=36, C3=48, E2=40, G2=43)
+    36, 0, 48, 36,  0, 36, 48, 0,   36, 40, 48, 43,  0, 48, 43, 40,
+    // Bar 4 (D -> B7: D2=38, D3=50, B1=35, B2=47, F#2=42, A2=45)
+    38, 0, 50, 38,  0, 38, 50, 38,  35, 0, 47, 35,   42, 45, 47, 50,
+  ],
+  lead: [
+    // Bar 1 (Em hook)
+    64, 0, 67, 0,   71, 0, 69, 67,  0, 64, 67, 0,   74, 0, 71, 69,
+    // Bar 2 (G -> D)
+    67, 0, 71, 0,   74, 0, 71, 69,  0, 66, 69, 0,   74, 71, 69, 66,
+    // Bar 3 (C lift)
+    64, 0, 67, 72,  0, 71, 67, 0,   72, 0, 76, 0,   74, 72, 71, 67,
+    // Bar 4 (D -> B7 tension)
+    69, 0, 74, 0,   71, 69, 66, 0,  71, 0, 75, 0,   76, 0, 75, 71,
+  ],
+  arpChords: [
+    [52, 55, 59], // Bar 1a: Em
+    [52, 55, 59], // Bar 1b: Em
+    [55, 59, 62], // Bar 2a: G
+    [50, 54, 57], // Bar 2b: D
+    [48, 52, 55], // Bar 3a: C
+    [48, 52, 55], // Bar 3b: C
+    [50, 54, 57], // Bar 4a: D
+    [47, 51, 54], // Bar 4b: B7/B
+  ],
+};
+
+// Track 1: CYBER FUNK (140 BPM, A Dorian) — syncopated electro-funk bassline & double-clap groove
+const TRACK_CYBER_FUNK: MusicTrack = {
+  name: 'CYBER FUNK',
+  bpm: 140,
+  swing: 0.13,
+  bassType: 'funk',
+  leadType: 'pulse',
+  arpType: 'triangle',
+  drumStyle: 'electrofunk',
+  bass: [
+    // Bar 1 (Am: A2=45, A3=57, G2=43, C3=48, D3=50, E3=52)
+    45, 0, 57, 45,  0, 43, 45, 0,   48, 0, 50, 52,  0, 43, 45, 57,
+    // Bar 2 (D7 Dorian: D3=50, D4=62, C3=48, F#3=54, A3=57)
+    50, 0, 62, 50,  0, 48, 50, 0,   54, 0, 57, 50,  0, 43, 45, 48,
+    // Bar 3 (G -> Em7: G2=43, G3=55, E2=40, E3=52, B2=47)
+    43, 0, 55, 43,  0, 45, 47, 0,   40, 0, 52, 40,  43, 45, 47, 50,
+    // Bar 4 (Am -> G/E turnaround)
+    45, 0, 57, 45,  0, 43, 45, 0,   48, 50, 52, 0,  55, 52, 50, 43,
+  ],
+  lead: [
+    // Bar 1 (Catchy A Dorian riff)
+    69, 0, 72, 74,  0, 76, 0, 72,   74, 0, 78, 0,   76, 74, 72, 69,
+    // Bar 2 (F#5 Dorian color lift)
+    74, 0, 78, 0,   81, 0, 79, 78,  0, 74, 76, 0,   72, 0, 71, 69,
+    // Bar 3 (G -> Em bounce)
+    71, 0, 74, 0,   79, 0, 76, 74,  0, 72, 71, 0,   76, 0, 74, 72,
+    // Bar 4 (Climbing Dorian turnaround)
+    69, 72, 76, 0,  78, 0, 79, 0,   81, 0, 79, 76,  74, 72, 74, 0,
+  ],
+  arpChords: [
+    [57, 60, 64], // Bar 1a: Am
+    [57, 60, 64], // Bar 1b: Am
+    [50, 54, 57], // Bar 2a: D
+    [54, 57, 60], // Bar 2b: D7
+    [55, 59, 62], // Bar 3a: G
+    [52, 55, 59], // Bar 3b: Em7
+    [57, 60, 64], // Bar 4a: Am
+    [55, 59, 64], // Bar 4b: G/E
+  ],
+};
+
+// Track 2: NEON DRIFT (138 BPM, F# minor) — rolling Outrun 16th-note bass & soaring lead
+const TRACK_NEON_DRIFT: MusicTrack = {
+  name: 'NEON DRIFT',
+  bpm: 138,
+  swing: 0.03,
+  bassType: 'outrun',
+  leadType: 'square',
+  arpType: 'sawtooth',
+  drumStyle: 'outrun',
+  bass: [
+    // Bar 1 (F#m: F#2=42, F#3=54, A2=45, C#3=49)
+    42, 42, 54, 42,  42, 42, 54, 42,  42, 42, 54, 42,  42, 45, 49, 54,
+    // Bar 2 (D: D2=38, D3=50, F#2=42, A2=45)
+    38, 38, 50, 38,  38, 38, 50, 38,  38, 38, 50, 38,  38, 42, 45, 50,
+    // Bar 3 (E: E2=40, E3=52, G#2=44, B2=47)
+    40, 40, 52, 40,  40, 40, 52, 40,  40, 40, 52, 40,  40, 44, 47, 52,
+    // Bar 4 (C#m: C#2=37, C#3=49, E2=40, G#2=44, B2=47)
+    37, 37, 49, 37,  37, 37, 49, 37,  37, 37, 49, 37,  40, 44, 47, 49,
+  ],
+  lead: [
+    // Bar 1 (Call)
+    73, 0, 0, 73,   76, 0, 78, 0,   73, 0, 71, 0,   69, 0, 68, 0,
+    // Bar 2 (Response)
+    69, 0, 0, 69,   74, 0, 73, 0,   71, 0, 69, 0,   66, 0, 0, 0,
+    // Bar 3 (Soaring lift)
+    76, 0, 0, 76,   80, 0, 78, 0,   76, 0, 73, 0,   71, 0, 76, 0,
+    // Bar 4 (C#m cascade)
+    73, 0, 76, 0,   80, 0, 81, 0,   78, 0, 76, 0,   73, 0, 71, 0,
+  ],
+  arpChords: [
+    [54, 57, 61], // Bar 1a: F#m
+    [54, 57, 61], // Bar 1b: F#m
+    [50, 54, 57], // Bar 2a: D
+    [50, 54, 57], // Bar 2b: D
+    [52, 56, 59], // Bar 3a: E
+    [52, 56, 59], // Bar 3b: E
+    [49, 52, 56], // Bar 4a: C#m
+    [49, 52, 59], // Bar 4b: C#m7
+  ],
+};
+
+// Track 3: HYPER GRID (142 BPM, D minor) — acid resonant bassline & breakbeat kick pickups
+const TRACK_HYPER_GRID: MusicTrack = {
+  name: 'HYPER GRID',
+  bpm: 142,
+  swing: 0.05,
+  bassType: 'acid',
+  leadType: 'pulse',
+  arpType: 'square',
+  drumStyle: 'breakbeat',
+  bass: [
+    // Bar 1 (Dm: D2=38, D3=50, F2=41, G2=43, A2=45)
+    38, 0, 50, 38,   41, 0, 50, 45,   38, 50, 0, 38,   43, 45, 50, 38,
+    // Bar 2 (Bb: Bb2=46, Bb3=58, F2=41, F3=53, D3=50)
+    46, 0, 58, 46,   0, 46, 58, 46,   41, 0, 53, 46,   50, 0, 58, 46,
+    // Bar 3 (C: C2=36, C3=48, E2=40, G2=43, E3=52)
+    36, 0, 48, 36,   40, 0, 48, 43,   36, 48, 0, 36,   43, 48, 52, 48,
+    // Bar 4 (A7: A1=33, A2=45, C#2=37, E2=40, C#3=49, E3=52)
+    33, 0, 45, 33,   37, 0, 45, 40,   33, 45, 49, 45,  52, 49, 45, 40,
+  ],
+  lead: [
+    // Bar 1 (Dm arcade hook)
+    62, 65, 69, 0,  74, 0, 72, 69,  65, 0, 69, 74,  0, 72, 69, 67,
+    // Bar 2 (Bb lift)
+    70, 0, 74, 0,   77, 0, 74, 70,  69, 0, 70, 74,  0, 72, 70, 69,
+    // Bar 3 (C drive)
+    72, 0, 76, 0,   79, 0, 76, 72,  74, 0, 72, 69,  67, 69, 72, 0,
+    // Bar 4 (A7 harmonic minor snap)
+    73, 0, 76, 0,   81, 0, 79, 76,  73, 76, 73, 69,  67, 69, 73, 0,
+  ],
+  arpChords: [
+    [50, 53, 57], // Bar 1a: Dm
+    [53, 57, 62], // Bar 1b: Dm (inv)
+    [46, 50, 53], // Bar 2a: Bb
+    [50, 53, 58], // Bar 2b: Bb (inv)
+    [48, 52, 55], // Bar 3a: C
+    [52, 55, 60], // Bar 3b: C (inv)
+    [45, 49, 55], // Bar 4a: A7
+    [49, 55, 57], // Bar 4b: A7 (inv)
+  ],
+};
+
+// Track 4 (Boss): CORE OVERDRIVE (148 BPM, C# Phrygian/minor) — relentless double-kick & Phrygian tension
+const TRACK_CORE_OVERDRIVE: MusicTrack = {
+  name: 'CORE OVERDRIVE',
+  bpm: 148,
+  swing: 0.0,
+  bassType: 'overdrive',
+  leadType: 'detuned',
+  arpType: 'square',
+  drumStyle: 'boss',
+  bass: [
+    // Bar 1 (C#m: C#2=37, C#3=49, D2=38, E2=40, G#2=44)
+    37, 49, 37, 49,  37, 49, 38, 49,  37, 49, 37, 49,  40, 49, 44, 49,
+    // Bar 2 (D Phrygian bII: D2=38, D3=50, F#2=42, A2=45)
+    38, 50, 38, 50,  38, 50, 42, 50,  38, 50, 38, 50,  45, 50, 42, 50,
+    // Bar 3 (Bm/B: B1=35, B2=47, F#2=42, D2=38, E2=40)
+    35, 47, 35, 47,  35, 47, 42, 47,  35, 47, 35, 47,  38, 47, 40, 47,
+    // Bar 4 (C#m Phrygian slam)
+    37, 49, 37, 49,  38, 50, 38, 50,  40, 52, 44, 56,  49, 37, 38, 37,
+  ],
+  lead: [
+    // Bar 1 (C# Phrygian aggressive riff)
+    73, 0, 74, 73,   0, 76, 74, 73,  80, 0, 74, 73,   76, 74, 73, 71,
+    // Bar 2 (D tension)
+    74, 0, 78, 0,    81, 0, 80, 78,  74, 0, 73, 74,   76, 74, 73, 71,
+    // Bar 3 (B -> E climb)
+    71, 0, 74, 0,    78, 0, 76, 74,  71, 0, 76, 0,    80, 78, 76, 74,
+    // Bar 4 (Relentless climax)
+    73, 74, 76, 80,  81, 0, 80, 78,  76, 74, 73, 74,  85, 0, 80, 74,
+  ],
+  arpChords: [
+    [49, 52, 56], // Bar 1a: C#m
+    [52, 56, 61], // Bar 1b: C#m (inv)
+    [50, 54, 57], // Bar 2a: D
+    [50, 56, 57], // Bar 2b: D Phrygian
+    [47, 50, 54], // Bar 3a: Bm
+    [50, 54, 59], // Bar 3b: Bm (inv)
+    [49, 52, 56], // Bar 4a: C#m
+    [50, 56, 61], // Bar 4b: D/C# tension
+  ],
+};
+
+const MUSIC_TRACKS: readonly MusicTrack[] = [
+  TRACK_SECTOR_PULSE,
+  TRACK_CYBER_FUNK,
+  TRACK_NEON_DRIFT,
+  TRACK_HYPER_GRID,
+  TRACK_CORE_OVERDRIVE,
 ];
 
 interface ToneOptions {
@@ -91,6 +287,7 @@ export class AudioEngine {
   private bgmPlaying = false;
   private bgmPaused = false;
   private bgmIntensity: 0 | 1 | 2 = 0;
+  private bgmTrackIndex = 0;
   private bgmStep = 0;
   private bgmNextNoteTime = 0;
   private bgmTimerId: ReturnType<typeof setInterval> | null = null;
@@ -186,6 +383,16 @@ export class AudioEngine {
     this.bgmIntensity = intensity;
   }
 
+  /** Switch background music track based on room number (cycles 4 room grooves) or dedicated boss track. */
+  setMusicTrack(roomNumber: number, isBoss: boolean): void {
+    const safeRoom = Math.max(1, Math.floor(roomNumber));
+    const nextTrackIndex = isBoss ? 4 : (safeRoom - 1) % 4;
+    if (nextTrackIndex !== this.bgmTrackIndex) {
+      this.bgmTrackIndex = nextTrackIndex;
+      this.bgmStep = 0;
+    }
+  }
+
   setBackgroundPaused(paused: boolean): void {
     this.bgmPaused = paused;
     if (!this.ctx) return;
@@ -221,36 +428,163 @@ export class AudioEngine {
       return;
     }
 
+    const track = MUSIC_TRACKS[this.bgmTrackIndex] ?? MUSIC_TRACKS[0];
+    const stepSec = 60 / track.bpm / 4;
+    if (this.bgmNextNoteTime < this.ctx.currentTime - 0.15) {
+      this.bgmNextNoteTime = this.ctx.currentTime + 0.02;
+    }
     const horizon = this.ctx.currentTime + BGM_LOOKAHEAD_SEC;
     let guard = 0;
     while (this.bgmNextNoteTime < horizon && guard < 8) {
-      // Subtle 16th-note swing on odd steps for groovy bounce
-      const swingOffset = this.bgmStep % 2 === 1 ? BGM_STEP_SEC * 0.09 : 0;
-      this.scheduleBgmStep(this.bgmStep, this.bgmNextNoteTime + swingOffset);
-      this.bgmNextNoteTime += BGM_STEP_SEC;
+      // Subtle 16th-note swing on odd steps according to track feel
+      const swingOffset = this.bgmStep % 2 === 1 ? stepSec * track.swing : 0;
+      this.scheduleBgmStep(track, this.bgmStep, this.bgmNextNoteTime + swingOffset, stepSec);
+      this.bgmNextNoteTime += stepSec;
       this.bgmStep = (this.bgmStep + 1) % 64;
       guard++;
     }
   }
 
-  private scheduleBgmStep(step: number, time: number): void {
+  private scheduleBgmStep(
+    track: MusicTrack,
+    step: number,
+    time: number,
+    stepSec: number,
+  ): void {
     if (!this.ctx || !this.bgmGain) return;
     const ctx = this.ctx;
     const dest = this.bgmGain;
     const stepInBar = step % 16;
+    const barIndex = Math.floor(step / 16);
     const intensity = this.bgmIntensity;
 
-    // 1. Kick drum: punchy 4-on-the-floor + syncopated pickup on step 14 in bars 2 & 4
-    const isFourOnFloor = stepInBar % 4 === 0;
-    const isKickPickup = (step === 30 || step === 62) && intensity >= 1;
-    if (isFourOnFloor || isKickPickup) {
+    // 1. Drums (kick, snare/clap, hi-hats, fills)
+    this.scheduleBgmDrums(ctx, dest, track.drumStyle, step, stepInBar, barIndex, time, intensity);
+
+    // 2. Bassline
+    const bassMidi = track.bass[step];
+    if (bassMidi > 0) {
+      this.scheduleBgmBass(ctx, dest, track.bassType, midiHz(bassMidi), time, stepSec);
+    }
+
+    // 3. Driving 16th-note synth arp (active during gameplay)
+    if (intensity >= 1) {
+      const chordIdx = Math.floor(step / 8);
+      const chord = track.arpChords[chordIdx];
+      const arpMidi = chord[step % 3] + (intensity === 2 && step % 6 >= 3 ? 12 : 0);
+      const arpOsc = ctx.createOscillator();
+      const arpEnv = ctx.createGain();
+      arpOsc.type = track.arpType;
+      arpOsc.frequency.setValueAtTime(midiHz(arpMidi), time);
+      arpEnv.gain.setValueAtTime(0.0001, time);
+      const arpPeak = track.arpType === 'sawtooth' ? 0.036 : 0.044;
+      arpEnv.gain.linearRampToValueAtTime(intensity === 2 ? arpPeak * 1.3 : arpPeak, time + 0.004);
+      arpEnv.gain.exponentialRampToValueAtTime(0.0001, time + 0.07);
+      arpOsc.connect(arpEnv);
+      arpEnv.connect(dest);
+      arpOsc.start(time);
+      arpOsc.stop(time + 0.085);
+    }
+
+    // 4. Retro lead hook
+    const leadMidi = track.lead[step];
+    if (leadMidi > 0 && intensity >= 1) {
+      this.scheduleBgmLead(ctx, dest, track.leadType, midiHz(leadMidi), time, stepSec, intensity);
+    }
+  }
+
+  private scheduleBgmDrums(
+    ctx: AudioContext,
+    dest: AudioNode,
+    style: MusicTrack['drumStyle'],
+    step: number,
+    stepInBar: number,
+    barIndex: number,
+    time: number,
+    intensity: 0 | 1 | 2,
+  ): void {
+    let kick = false;
+    let kickGain = 0.55;
+    let snare = false;
+    let snareGain = 1.0;
+    let doubleClap = false;
+    let openHat = false;
+
+    switch (style) {
+      case 'synthwave': {
+        kick = stepInBar % 4 === 0 || ((step === 30 || step === 62) && intensity >= 1);
+        snare = stepInBar === 4 || stepInBar === 12 || (step === 63 && intensity >= 1);
+        snareGain = step === 63 ? 0.55 : 1.0;
+        openHat = stepInBar === 10 && intensity >= 1;
+        break;
+      }
+      case 'electrofunk': {
+        kick =
+          stepInBar === 0 ||
+          stepInBar === 6 ||
+          stepInBar === 8 ||
+          ((barIndex === 1 || barIndex === 3) && stepInBar === 14 && intensity >= 1);
+        const isMainSnare = stepInBar === 4 || stepInBar === 12;
+        const isGhost =
+          intensity >= 1 &&
+          (((barIndex === 1 || barIndex === 3) && stepInBar === 7) || step === 63);
+        snare = isMainSnare || isGhost;
+        snareGain = isMainSnare ? 1.0 : 0.48;
+        doubleClap = stepInBar === 12 && intensity >= 1;
+        openHat = stepInBar === 14 && intensity >= 1;
+        break;
+      }
+      case 'outrun': {
+        kick = stepInBar % 4 === 0 || (step === 62 && intensity >= 1);
+        snare = stepInBar === 4 || stepInBar === 12;
+        openHat = (stepInBar === 2 || stepInBar === 10) && intensity >= 1;
+        // Descending retro synth-tom fills at bar 2 and bar 4 endings
+        if (intensity >= 1 && ((step >= 28 && step <= 31) || (step >= 60 && step <= 63))) {
+          const tomIdx = stepInBar - 12;
+          const tomFreqs = [195, 152, 118, 88];
+          this.triggerDrumTom(ctx, dest, tomFreqs[tomIdx] ?? 118, time);
+        }
+        break;
+      }
+      case 'breakbeat': {
+        const isBreakKick =
+          stepInBar === 0 ||
+          stepInBar === 6 ||
+          stepInBar === 10 ||
+          ((step === 27 || step === 30 || step === 59 || step === 62) && intensity >= 1);
+        kick = isBreakKick;
+        kickGain = stepInBar === 0 ? 0.58 : 0.48;
+        const isMainSnare = stepInBar === 4 || stepInBar === 12;
+        const isGhost = intensity >= 1 && (stepInBar === 7 || stepInBar === 15);
+        snare = isMainSnare || isGhost;
+        snareGain = isMainSnare ? 1.0 : 0.45;
+        openHat = (stepInBar === 8 || stepInBar === 14) && intensity >= 1;
+        break;
+      }
+      case 'boss': {
+        const isDoubleKick =
+          intensity >= 1 &&
+          (stepInBar === 2 || stepInBar === 10 || stepInBar === 14 || step === 60 || step === 62);
+        kick = stepInBar % 4 === 0 || isDoubleKick;
+        kickGain = stepInBar % 4 === 0 ? 0.58 : 0.46;
+        const isMainSnare = stepInBar === 4 || stepInBar === 12;
+        const isRapidFill =
+          intensity >= 1 && (step === 30 || step === 31 || step >= 61);
+        snare = isMainSnare || isRapidFill;
+        snareGain = isMainSnare ? 1.05 : 0.65;
+        openHat = (stepInBar === 6 || stepInBar === 14) && intensity >= 1;
+        break;
+      }
+    }
+
+    if (kick) {
       const osc = ctx.createOscillator();
       const env = ctx.createGain();
       osc.type = 'sine';
-      osc.frequency.setValueAtTime(148, time);
+      osc.frequency.setValueAtTime(style === 'boss' ? 156 : 148, time);
       osc.frequency.exponentialRampToValueAtTime(42, time + 0.11);
       env.gain.setValueAtTime(0.0001, time);
-      env.gain.linearRampToValueAtTime(0.55, time + 0.004);
+      env.gain.linearRampToValueAtTime(kickGain, time + 0.004);
       env.gain.exponentialRampToValueAtTime(0.0001, time + 0.14);
       osc.connect(env);
       env.connect(dest);
@@ -258,56 +592,23 @@ export class AudioEngine {
       osc.stop(time + 0.16);
     }
 
-    // 2. Gated retro snare on beats 2 & 4 (steps 4, 12) + ghost fill on bar 4 step 15
-    const isSnare = stepInBar === 4 || stepInBar === 12;
-    const isSnareFill = step === 63 && intensity >= 1;
-    if (isSnare || isSnareFill) {
-      const volScale = isSnare ? 1.0 : 0.55;
-      // Snare body thump
-      const bodyOsc = ctx.createOscillator();
-      const bodyEnv = ctx.createGain();
-      bodyOsc.type = 'triangle';
-      bodyOsc.frequency.setValueAtTime(215, time);
-      bodyOsc.frequency.exponentialRampToValueAtTime(95, time + 0.08);
-      bodyEnv.gain.setValueAtTime(0.0001, time);
-      bodyEnv.gain.linearRampToValueAtTime(0.26 * volScale, time + 0.003);
-      bodyEnv.gain.exponentialRampToValueAtTime(0.0001, time + 0.09);
-      bodyOsc.connect(bodyEnv);
-      bodyEnv.connect(dest);
-      bodyOsc.start(time);
-      bodyOsc.stop(time + 0.1);
-
-      // Gated noise crack
-      if (this.noiseBuffer) {
-        const src = ctx.createBufferSource();
-        src.buffer = this.noiseBuffer;
-        const bp = ctx.createBiquadFilter();
-        bp.type = 'bandpass';
-        bp.frequency.setValueAtTime(1750, time);
-        bp.Q.setValueAtTime(0.85, time);
-        const nEnv = ctx.createGain();
-        nEnv.gain.setValueAtTime(0.28 * volScale, time);
-        nEnv.gain.exponentialRampToValueAtTime(0.0001, time + 0.13);
-        src.connect(bp);
-        bp.connect(nEnv);
-        nEnv.connect(dest);
-        src.start(time);
-        src.stop(time + 0.14);
+    if (snare) {
+      this.triggerSnareHit(ctx, dest, time, snareGain);
+      if (doubleClap) {
+        this.triggerClapBurst(ctx, dest, time + 0.022);
       }
     }
 
-    // 3. Groovy 16th-note hi-hats (off-beat accents + open hat on step 10/14)
     if (this.noiseBuffer && (intensity >= 1 || step % 2 === 0)) {
       const isOffBeat = stepInBar % 4 === 2;
-      const isOpenHat = stepInBar === 10 && intensity >= 1;
-      const hatGain = isOpenHat ? 0.11 : isOffBeat ? 0.095 : step % 2 === 0 ? 0.045 : 0.03;
-      const hatDur = isOpenHat ? 0.11 : 0.032;
+      const hatGain = openHat ? 0.11 : isOffBeat ? 0.095 : step % 2 === 0 ? 0.045 : 0.03;
+      const hatDur = openHat ? 0.11 : 0.032;
 
       const src = ctx.createBufferSource();
       src.buffer = this.noiseBuffer;
       const hp = ctx.createBiquadFilter();
       hp.type = 'highpass';
-      hp.frequency.setValueAtTime(isOpenHat ? 6200 : 7800, time);
+      hp.frequency.setValueAtTime(openHat ? 6200 : 7800, time);
       const env = ctx.createGain();
       env.gain.setValueAtTime(hatGain, time);
       env.gain.exponentialRampToValueAtTime(0.0001, time + hatDur);
@@ -317,105 +618,225 @@ export class AudioEngine {
       src.start(time);
       src.stop(time + hatDur + 0.01);
     }
+  }
 
-    // 4. Funky slap-synth bassline (sawtooth + sub square through plucking resonant LP filter)
-    const bassMidi = BASS_PATTERN[step];
-    if (bassMidi > 0) {
-      const freq = midiHz(bassMidi);
-      const dur = BGM_STEP_SEC * 0.92;
+  private triggerSnareHit(
+    ctx: AudioContext,
+    dest: AudioNode,
+    time: number,
+    volScale: number,
+  ): void {
+    const bodyOsc = ctx.createOscillator();
+    const bodyEnv = ctx.createGain();
+    bodyOsc.type = 'triangle';
+    bodyOsc.frequency.setValueAtTime(215, time);
+    bodyOsc.frequency.exponentialRampToValueAtTime(95, time + 0.08);
+    bodyEnv.gain.setValueAtTime(0.0001, time);
+    bodyEnv.gain.linearRampToValueAtTime(0.26 * volScale, time + 0.003);
+    bodyEnv.gain.exponentialRampToValueAtTime(0.0001, time + 0.09);
+    bodyOsc.connect(bodyEnv);
+    bodyEnv.connect(dest);
+    bodyOsc.start(time);
+    bodyOsc.stop(time + 0.1);
 
-      const saw = ctx.createOscillator();
-      saw.type = 'sawtooth';
-      saw.frequency.setValueAtTime(freq, time);
+    if (this.noiseBuffer) {
+      const src = ctx.createBufferSource();
+      src.buffer = this.noiseBuffer;
+      const bp = ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.frequency.setValueAtTime(1750, time);
+      bp.Q.setValueAtTime(0.85, time);
+      const nEnv = ctx.createGain();
+      nEnv.gain.setValueAtTime(0.28 * volScale, time);
+      nEnv.gain.exponentialRampToValueAtTime(0.0001, time + 0.13);
+      src.connect(bp);
+      bp.connect(nEnv);
+      nEnv.connect(dest);
+      src.start(time);
+      src.stop(time + 0.14);
+    }
+  }
 
-      const sub = ctx.createOscillator();
-      sub.type = 'square';
-      sub.frequency.setValueAtTime(freq, time);
+  private triggerClapBurst(ctx: AudioContext, dest: AudioNode, time: number): void {
+    if (!this.noiseBuffer) return;
+    const src = ctx.createBufferSource();
+    src.buffer = this.noiseBuffer;
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.setValueAtTime(2450, time);
+    bp.Q.setValueAtTime(1.1, time);
+    const env = ctx.createGain();
+    env.gain.setValueAtTime(0.2, time);
+    env.gain.exponentialRampToValueAtTime(0.0001, time + 0.08);
+    src.connect(bp);
+    bp.connect(env);
+    env.connect(dest);
+    src.start(time);
+    src.stop(time + 0.09);
+  }
 
-      const lp = ctx.createBiquadFilter();
-      lp.type = 'lowpass';
-      lp.Q.setValueAtTime(3.6, time);
-      lp.frequency.setValueAtTime(2100, time);
-      lp.frequency.exponentialRampToValueAtTime(240, time + dur);
+  private triggerDrumTom(ctx: AudioContext, dest: AudioNode, startFreq: number, time: number): void {
+    const osc = ctx.createOscillator();
+    const env = ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(startFreq, time);
+    osc.frequency.exponentialRampToValueAtTime(startFreq * 0.55, time + 0.09);
+    env.gain.setValueAtTime(0.0001, time);
+    env.gain.linearRampToValueAtTime(0.22, time + 0.004);
+    env.gain.exponentialRampToValueAtTime(0.0001, time + 0.1);
+    osc.connect(env);
+    env.connect(dest);
+    osc.start(time);
+    osc.stop(time + 0.11);
+  }
 
-      const bEnv = ctx.createGain();
-      bEnv.gain.setValueAtTime(0.0001, time);
-      bEnv.gain.linearRampToValueAtTime(0.24, time + 0.006);
-      bEnv.gain.exponentialRampToValueAtTime(0.0001, time + dur);
+  private scheduleBgmBass(
+    ctx: AudioContext,
+    dest: AudioNode,
+    bassType: MusicTrack['bassType'],
+    freq: number,
+    time: number,
+    stepSec: number,
+  ): void {
+    const durScale =
+      bassType === 'outrun' ? 0.96 : bassType === 'funk' ? 0.85 : 0.92;
+    const dur = stepSec * durScale;
 
-      const subGain = ctx.createGain();
-      subGain.gain.setValueAtTime(0.45, time);
+    const osc1 = ctx.createOscillator();
+    osc1.type = 'sawtooth';
+    osc1.frequency.setValueAtTime(freq, time);
 
-      saw.connect(lp);
-      sub.connect(subGain);
-      subGain.connect(lp);
-      lp.connect(bEnv);
-      bEnv.connect(dest);
-
-      saw.start(time);
-      sub.start(time);
-      saw.stop(time + dur + 0.02);
-      sub.stop(time + dur + 0.02);
+    const osc2 = ctx.createOscillator();
+    if (bassType === 'outrun') {
+      osc2.type = 'sawtooth';
+      osc2.frequency.setValueAtTime(freq * 1.005, time);
+    } else if (bassType === 'funk') {
+      osc2.type = 'triangle';
+      osc2.frequency.setValueAtTime(freq, time);
+    } else {
+      osc2.type = 'square';
+      osc2.frequency.setValueAtTime(freq, time);
     }
 
-    // 5. Driving 16th-note synth arp (active during gameplay)
-    if (intensity >= 1) {
-      const chordIdx =
-        step < 16 ? 0 : step < 24 ? 1 : step < 32 ? 2 : step < 48 ? 3 : step < 56 ? 4 : 5;
-      const chord = ARP_CHORDS[chordIdx];
-      const arpMidi = chord[step % 3] + (intensity === 2 && step % 6 >= 3 ? 12 : 0);
-      const arpOsc = ctx.createOscillator();
-      const arpEnv = ctx.createGain();
-      arpOsc.type = 'square';
-      arpOsc.frequency.setValueAtTime(midiHz(arpMidi), time);
-      arpEnv.gain.setValueAtTime(0.0001, time);
-      arpEnv.gain.linearRampToValueAtTime(intensity === 2 ? 0.055 : 0.04, time + 0.004);
-      arpEnv.gain.exponentialRampToValueAtTime(0.0001, time + 0.07);
-      arpOsc.connect(arpEnv);
-      arpEnv.connect(dest);
-      arpOsc.start(time);
-      arpOsc.stop(time + 0.085);
-    }
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    const q =
+      bassType === 'acid'
+        ? 7.5
+        : bassType === 'overdrive'
+          ? 5.0
+          : bassType === 'funk'
+            ? 4.4
+            : bassType === 'outrun'
+              ? 2.4
+              : 3.6;
+    const startCutoff =
+      bassType === 'acid'
+        ? 2900
+        : bassType === 'overdrive'
+          ? 2800
+          : bassType === 'funk'
+            ? 2400
+            : bassType === 'outrun'
+              ? 1750
+              : 2100;
+    const endCutoff = bassType === 'outrun' ? 320 : bassType === 'overdrive' ? 290 : 240;
 
-    // 6. Adrenaline retro lead hook
-    const leadMidi = LEAD_PATTERN[step];
-    if (leadMidi > 0 && intensity >= 1) {
-      const leadDur = BGM_STEP_SEC * 1.45;
-      const freq = midiHz(leadMidi);
+    lp.Q.setValueAtTime(q, time);
+    lp.frequency.setValueAtTime(startCutoff, time);
+    lp.frequency.exponentialRampToValueAtTime(endCutoff, time + dur);
+
+    const bEnv = ctx.createGain();
+    bEnv.gain.setValueAtTime(0.0001, time);
+    bEnv.gain.linearRampToValueAtTime(bassType === 'overdrive' ? 0.25 : 0.24, time + 0.006);
+    bEnv.gain.exponentialRampToValueAtTime(0.0001, time + dur);
+
+    const subGain = ctx.createGain();
+    subGain.gain.setValueAtTime(
+      bassType === 'acid' ? 0.3 : bassType === 'overdrive' ? 0.55 : 0.45,
+      time,
+    );
+
+    osc1.connect(lp);
+    osc2.connect(subGain);
+    subGain.connect(lp);
+    lp.connect(bEnv);
+    bEnv.connect(dest);
+
+    osc1.start(time);
+    osc2.start(time);
+    osc1.stop(time + dur + 0.02);
+    osc2.stop(time + dur + 0.02);
+  }
+
+  private scheduleBgmLead(
+    ctx: AudioContext,
+    dest: AudioNode,
+    leadType: MusicTrack['leadType'],
+    freq: number,
+    time: number,
+    stepSec: number,
+    intensity: 0 | 1 | 2,
+  ): void {
+    const leadDur = stepSec * (leadType === 'detuned' ? 1.35 : 1.45);
+    const leadFilter = ctx.createBiquadFilter();
+    leadFilter.type = 'lowpass';
+    leadFilter.frequency.setValueAtTime(
+      leadType === 'detuned' ? 4600 : intensity === 2 ? 4200 : 3000,
+      time,
+    );
+
+    const leadEnv = ctx.createGain();
+    leadEnv.gain.setValueAtTime(0.0001, time);
+    leadEnv.gain.linearRampToValueAtTime(
+      intensity === 2 ? 0.115 : 0.095,
+      time + 0.008,
+    );
+    leadEnv.gain.exponentialRampToValueAtTime(0.0001, time + leadDur);
+
+    leadFilter.connect(leadEnv);
+    leadEnv.connect(dest);
+
+    if (leadType === 'detuned') {
+      // Aggressive dual-detuned sawtooth lead for Boss overdrive
+      for (const detune of [0.994, 1.006]) {
+        const osc = ctx.createOscillator();
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(freq * detune, time);
+        osc.connect(leadFilter);
+        osc.start(time);
+        osc.stop(time + leadDur + 0.02);
+      }
+    } else {
       const leadOsc = ctx.createOscillator();
       leadOsc.type = 'square';
-      leadOsc.frequency.setValueAtTime(freq * 0.985, time);
-      leadOsc.frequency.exponentialRampToValueAtTime(freq, time + 0.022);
-
-      const leadFilter = ctx.createBiquadFilter();
-      leadFilter.type = 'lowpass';
-      leadFilter.frequency.setValueAtTime(intensity === 2 ? 4200 : 2900, time);
-
-      const leadEnv = ctx.createGain();
-      leadEnv.gain.setValueAtTime(0.0001, time);
-      leadEnv.gain.linearRampToValueAtTime(intensity === 2 ? 0.115 : 0.095, time + 0.008);
-      leadEnv.gain.exponentialRampToValueAtTime(0.0001, time + leadDur);
-
+      if (leadType === 'square') {
+        leadOsc.frequency.setValueAtTime(freq * 0.985, time);
+        leadOsc.frequency.exponentialRampToValueAtTime(freq, time + 0.022);
+      } else {
+        leadOsc.frequency.setValueAtTime(freq, time);
+      }
       leadOsc.connect(leadFilter);
-      leadFilter.connect(leadEnv);
-      leadEnv.connect(dest);
       leadOsc.start(time);
       leadOsc.stop(time + leadDur + 0.02);
+    }
 
-      // Boss / High-Flow octave shimmer
-      if (intensity === 2) {
-        const octOsc = ctx.createOscillator();
-        const octEnv = ctx.createGain();
-        octOsc.type = 'triangle';
-        octOsc.frequency.setValueAtTime(freq * 2, time);
-        octEnv.gain.setValueAtTime(0.0001, time);
-        octEnv.gain.linearRampToValueAtTime(0.055, time + 0.008);
-        octEnv.gain.exponentialRampToValueAtTime(0.0001, time + leadDur * 0.8);
-        octOsc.connect(octEnv);
-        octEnv.connect(dest);
-        octOsc.start(time);
-        octOsc.stop(time + leadDur);
-      }
+    // Boss / High-Flow octave shimmer (always active on Boss lead, and on intensity 2 for normal tracks)
+    if (intensity === 2 || leadType === 'detuned') {
+      const octOsc = ctx.createOscillator();
+      const octEnv = ctx.createGain();
+      octOsc.type = leadType === 'detuned' ? 'square' : 'triangle';
+      octOsc.frequency.setValueAtTime(freq * 2, time);
+      octEnv.gain.setValueAtTime(0.0001, time);
+      octEnv.gain.linearRampToValueAtTime(
+        intensity === 2 ? 0.055 : 0.032,
+        time + 0.008,
+      );
+      octEnv.gain.exponentialRampToValueAtTime(0.0001, time + leadDur * 0.8);
+      octOsc.connect(octEnv);
+      octEnv.connect(dest);
+      octOsc.start(time);
+      octOsc.stop(time + leadDur);
     }
   }
 
@@ -699,10 +1120,10 @@ export class AudioEngine {
 
     this.playTone(out, {
       type: 'sine',
-      startFreq: 130,
-      endFreq: 55,
-      duration: 0.22,
-      gain: 0.28,
+      startFreq: 160,
+      endFreq: 42,
+      duration: 0.26,
+      gain: 0.44,
     });
   }
 
@@ -716,7 +1137,7 @@ export class AudioEngine {
     const freq = this.masterFilter.frequency;
     freq.cancelScheduledValues(now);
     freq.setValueAtTime(Math.max(200, freq.value), now);
-    freq.exponentialRampToValueAtTime(DEFAULT_FILTER_FREQ, now + 0.18);
+    freq.exponentialRampToValueAtTime(DEFAULT_FILTER_FREQ, now + 0.14);
   }
 
   playShieldBreak(): void {

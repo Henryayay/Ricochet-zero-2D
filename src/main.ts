@@ -19,6 +19,8 @@ const STARTER_WEAPONS: WeaponId[] = ['railgun', 'shotgun', 'sawblade', 'arccoil'
 
 let latestDraft: DraftOption[] = [];
 let latestDraftRoom = 1;
+let latestTransferRemaining = 0;
+let latestTransferWeapon: WeaponId | null = null;
 let latestSummary: RunSummary = {
   score: 0,
   bestScore: 0,
@@ -31,9 +33,11 @@ const engine = new GameEngine({
   onPhaseChange(phase) {
     renderUI(phase);
   },
-  onDraftReady(options, roomNumber) {
+  onDraftReady(options, roomNumber, transferRemaining = 0, transferWeapon) {
     latestDraft = options;
     latestDraftRoom = roomNumber;
+    latestTransferRemaining = transferRemaining;
+    latestTransferWeapon = transferWeapon ?? null;
     renderUI('draft');
   },
   onGameOver(summary) {
@@ -154,7 +158,12 @@ function renderTitleOverlay(): string {
 function renderDraftOverlay(): string {
   const cards = latestDraft
     .map((opt, idx) => {
-      const badge = opt.kind === 'weapon' ? 'WEAPON' : 'PERK';
+      const badge =
+        opt.kind === 'weapon'
+          ? 'WEAPON'
+          : opt.kind === 'weapon_mod'
+            ? opt.rankLabel ?? 'MOD'
+            : 'PERK';
       return `
         <button class="draft-card ${opt.kind}" data-draft-idx="${idx}" type="button">
           <div class="draft-card-top">
@@ -167,11 +176,19 @@ function renderDraftOverlay(): string {
     })
     .join('');
 
+  const isTransfer = latestTransferRemaining > 0 && latestTransferWeapon !== null;
+  const heading = isTransfer
+    ? `MOD TRANSFER (${latestTransferRemaining} LEFT)`
+    : `ROOM ${latestDraftRoom} CLEARED`;
+  const sub = isTransfer
+    ? `UPGRADE ${WEAPON_META[latestTransferWeapon!].name.toUpperCase()}`
+    : `SHIELD RESTORED // DRAFT 1 UPGRADE (${engine.player.weaponUpgradeBudget}/4 MODS)`;
+
   return `
     <div class="overlay-backdrop">
       <div class="draft-header">
-        <h2>ROOM ${latestDraftRoom} CLEARED</h2>
-        <p>SHIELD RESTORED // DRAFT 1 UPGRADE</p>
+        <h2>${heading}</h2>
+        <p>${sub}</p>
       </div>
       <div class="draft-cards">${cards}</div>
     </div>

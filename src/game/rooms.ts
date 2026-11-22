@@ -1,3 +1,4 @@
+import { COMBAT } from './constants';
 import {
   allocEntityId,
   DraftOption,
@@ -8,8 +9,9 @@ import {
   PerkId,
   PlayerState,
   WeaponId,
+  WeaponModId,
 } from './entities';
-import { WEAPON_META } from './weapons';
+import { WEAPON_META, WEAPON_MOD_META, WEAPON_MODS_BY_WEAPON } from './weapons';
 
 export const PERK_META: Record<PerkId, { title: string; description: string }> = {
   preview_bounce: {
@@ -141,7 +143,8 @@ function makeEnemy(kind: EnemyKind, x: number, y: number, roomNumber: number): E
       };
     }
     case 'boss': {
-      const hp = 14 + Math.floor(roomNumber / 5) * 6;
+      const bossTier = Math.floor(roomNumber / 5);
+      const hp = 11 + bossTier * 5;
       return {
         id: allocEntityId(),
         kind,
@@ -386,36 +389,101 @@ function shuffled<T>(items: readonly T[]): T[] {
   return arr;
 }
 
+function makeWeaponModOption(modId: WeaponModId, currentRank: number): DraftOption {
+  const meta = WEAPON_MOD_META[modId];
+  const nextRank = currentRank + 1;
+  return {
+    id: `mod_${modId}`,
+    kind: 'weapon_mod',
+    weaponId: meta.weapon,
+    weaponModId: modId,
+    title: meta.title,
+    description: meta.description,
+    rankLabel: `Rank ${nextRank}/${COMBAT.MAX_WEAPON_MOD_RANK}`,
+  };
+}
+
+function makePerkOption(perkId: PerkId): DraftOption {
+  const meta = PERK_META[perkId];
+  return {
+    id: `perk_${perkId}`,
+    kind: 'perk',
+    perkId,
+    title: meta.title,
+    description: meta.description,
+  };
+}
+
+export function generateWeaponTransferOptions(
+  player: PlayerState,
+  newWeapon: WeaponId,
+): DraftOption[] {
+  const options: DraftOption[] = [];
+  for (const modId of WEAPON_MODS_BY_WEAPON[newWeapon]) {
+    const currentRank = player.weaponMods?.[modId] ?? 0;
+    if (currentRank < COMBAT.MAX_WEAPON_MOD_RANK) {
+      options.push(makeWeaponModOption(modId, currentRank));
+    }
+  }
+  return options;
+}
+
 export function generateDraftOptions(
   player: PlayerState,
   roomNumber: number,
 ): DraftOption[] {
   void roomNumber;
   const options: DraftOption[] = [];
+  const usedIds = new Set<string>();
+  const budget = player.weaponUpgradeBudget ?? 0;
 
+  // Option A: Upgrade current weapon if below cap; otherwise offer a utility perk
+  const upgradeableMods =
+    budget < COMBAT.MAX_WEAPON_UPGRADES
+      ? WEAPON_MODS_BY_WEAPON[player.weapon].filter(
+          (modId) => (player.weaponMods?.[modId] ?? 0) < COMBAT.MAX_WEAPON_MOD_RANK,
+        )
+      : [];
+
+  if (upgradeableMods.length > 0) {
+    const pickedMod = shuffled(upgradeableMods)[0];
+    const opt = makeWeaponModOption(pickedMod, player.weaponMods?.[pickedMod] ?? 0);
+    options.push(opt);
+    usedIds.add(opt.id);
+  } else {
+    const fallbackPerk = shuffled(ALL_PERKS)[0];
+    if (fallbackPerk) {
+      const opt = makePerkOption(fallbackPerk);
+      options.push(opt);
+      usedIds.add(opt.id);
+    }
+  }
+
+  // Option B: Weapon swap to one of the other 3 weapons
   const otherWeapons = shuffled(ALL_WEAPONS.filter((w) => w !== player.weapon));
   const pickedWeapon = otherWeapons[0];
   if (pickedWeapon) {
     const meta = WEAPON_META[pickedWeapon];
-    options.push({
+    const transferNote =
+      budget > 0 ? ` Transfers ${budget} weapon upgrade(s) to re-pick!` : '';
+    const opt: DraftOption = {
       id: `weapon_${pickedWeapon}`,
       kind: 'weapon',
       weaponId: pickedWeapon,
       title: `Equip: ${meta.name}`,
-      description: meta.desc,
-    });
+      description: `${meta.desc}${transferNote}`,
+    };
+    options.push(opt);
+    usedIds.add(opt.id);
   }
 
-  const pickedPerks = shuffled(ALL_PERKS).slice(0, 3 - options.length);
-  for (const perkId of pickedPerks) {
-    const meta = PERK_META[perkId];
-    options.push({
-      id: `perk_${perkId}`,
-      kind: 'perk',
-      perkId,
-      title: meta.title,
-      description: meta.description,
-    });
+  // Option C: Utility perk (ensure distinct IDs and always 3 options)
+  for (const perkId of shuffled(ALL_PERKS)) {
+    if (options.length >= 3) break;
+    const opt = makePerkOption(perkId);
+    if (usedIds.has(opt.id)) continue;
+    options.push(opt);
+    usedIds.add(opt.id);
   }
 
   return options;

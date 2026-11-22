@@ -16,6 +16,7 @@ import {
   ArcEffect,
   BeamEffect,
   createInitialPerks,
+  createInitialWeaponMods,
   DraftOption,
   Enemy,
   FloatingText,
@@ -40,7 +41,11 @@ import {
   stepCircleArena,
 } from './physics.ts';
 import { AimRenderState, GameRenderer, RenderState } from './renderer.ts';
-import { generateDraftOptions, generateRoom } from './rooms.ts';
+import {
+  generateDraftOptions,
+  generateRoom,
+  generateWeaponTransferOptions,
+} from './rooms.ts';
 import { fireActiveWeapon } from './weapons.ts';
 
 export type GamePhase = 'title' | 'playing' | 'transition' | 'draft' | 'gameover';
@@ -55,7 +60,12 @@ export interface RunSummary {
 
 export interface EngineCallbacks {
   onPhaseChange?: (phase: GamePhase) => void;
-  onDraftReady?: (options: DraftOption[], roomNumber: number) => void;
+  onDraftReady?: (
+    options: DraftOption[],
+    roomNumber: number,
+    transferRemaining?: number,
+    transferWeapon?: WeaponId,
+  ) => void;
   onGameOver?: (summary: RunSummary) => void;
   onMuteChange?: (muted: boolean) => void;
 }
@@ -102,10 +112,12 @@ export class GameEngine {
 
   private transitionTimer = 0;
   private timeElapsed = 0;
+  private lastShieldDeflectTime = -1;
   private overheatWarnSecond = -1;
   private multiKillCount = 0;
   private multiKillTimer = 0;
   private selectedStartWeapon: WeaponId = 'railgun';
+  private pendingWeaponTransfers = 0;
 
   // One-thumb pointer state machine
   private activePointerId: number | null = null;
@@ -165,6 +177,8 @@ export class GameEngine {
       chargeTier: 0,
       armored: false,
       weapon,
+      weaponMods: createInitialWeaponMods(),
+      weaponUpgradeBudget: 0,
       perks: createInitialPerks(),
       trail: [],
       flashTimer: 0,
@@ -232,6 +246,7 @@ export class GameEngine {
     this.shakeIntensity = 0;
     this.multiKillCount = 0;
     this.multiKillTimer = 0;
+    this.pendingWeaponTransfers = 0;
     this.clearPointerState(false);
     this.loadRoom(1);
     this.setPhase('playing');
@@ -280,6 +295,8 @@ export class GameEngine {
     this.player.chargeTier = 0;
     this.player.trail = [];
     this.player.shield = this.player.maxShield;
+    this.audio.setMusicTrack(roomNum, this.isBossRoom);
+    this.updateMusicIntensity();
 
     this.addFloatingText(
       CANVAS_WIDTH / 2,
@@ -295,8 +312,51 @@ export class GameEngine {
     this.audio.init();
     this.audio.playDraftPick();
 
-    if (option.kind === 'weapon' && option.weaponId) {
+    if (option.kind === 'weapon_mod' && option.weaponModId) {
+      const current = this.player.weaponMods[option.weaponModId] ?? 0;
+      this.player.weaponMods[option.weaponModId] = Math.min(
+        COMBAT.MAX_WEAPON_MOD_RANK,
+        current + 1,
+      );
+
+      if (this.pendingWeaponTransfers > 0) {
+        this.pendingWeaponTransfers -= 1;
+        if (this.pendingWeaponTransfers > 0) {
+          const transferOpts = generateWeaponTransferOptions(this.player, this.player.weapon);
+          if (transferOpts.length > 0) {
+            this.callbacks.onDraftReady?.(
+              transferOpts,
+              this.roomNumber,
+              this.pendingWeaponTransfers,
+              this.player.weapon,
+            );
+            return;
+          }
+          this.pendingWeaponTransfers = 0;
+        }
+      } else {
+        this.player.weaponUpgradeBudget = Math.min(
+          COMBAT.MAX_WEAPON_UPGRADES,
+          this.player.weaponUpgradeBudget + 1,
+        );
+      }
+    } else if (option.kind === 'weapon' && option.weaponId) {
       this.player.weapon = option.weaponId;
+      this.player.weaponMods = createInitialWeaponMods();
+      if (this.player.weaponUpgradeBudget > 0) {
+        this.pendingWeaponTransfers = this.player.weaponUpgradeBudget;
+        const transferOpts = generateWeaponTransferOptions(this.player, this.player.weapon);
+        if (transferOpts.length > 0) {
+          this.callbacks.onDraftReady?.(
+            transferOpts,
+            this.roomNumber,
+            this.pendingWeaponTransfers,
+            this.player.weapon,
+          );
+          return;
+        }
+        this.pendingWeaponTransfers = 0;
+      }
     } else if (option.kind === 'perk' && option.perkId) {
       this.applyPerk(option.perkId);
     }
@@ -735,21 +795,24 @@ export class GameEngine {
         continue;
       }
 
-      pr.x += pr.vx * dt;
-      pr.y += pr.vy * dt;
-
-      if (
-        pr.x - pr.radius <= ARENA.left ||
-        pr.x + pr.radius >= ARENA.right ||
-        pr.y - pr.radius <= ARENA.top ||
-        pr.y + pr.radius >= ARENA.bottom
-      ) {
-        this.spawnSparks(pr.x, pr.y, -pr.vx, -pr.vy, pr.color, 3, 25, 75);
-        this.projectiles.splice(i, 1);
-        continue;
-      }
-
       if (pr.fromPlayer) {
+        const wallHit = stepCircleArena(pr, dt, 1.0);
+        if (wallHit.hitWall) {
+          const left = pr.bouncesLeft ?? 0;
+          if (left <= 0) {
+            this.spawnSparks(pr.x, pr.y, wallHit.normalX, wallHit.normalY, pr.color, 3, 25, 75);
+            this.projectiles.splice(i, 1);
+            continue;
+          }
+          pr.bouncesLeft = left - wallHit.wallHitCount;
+          pr.bouncesDone = (pr.bouncesDone ?? 0) + wallHit.wallHitCount;
+          this.spawnSparks(pr.x, pr.y, wallHit.normalX, wallHit.normalY, pr.color, 4, 30, 85);
+          if (pr.bouncesLeft < 0) {
+            this.projectiles.splice(i, 1);
+            continue;
+          }
+        }
+
         let hit = false;
         for (const e of this.enemies) {
           if (e.hp <= 0) continue;
@@ -763,7 +826,7 @@ export class GameEngine {
               dir.y * kb,
               pr.x - dir.x * 8,
               pr.y - dir.y * 8,
-              Boolean(pr.fromCharge),
+              Boolean(pr.fromCharge) || (pr.bouncesDone ?? 0) > 0,
             );
             hit = true;
             break;
@@ -783,6 +846,20 @@ export class GameEngine {
           this.projectiles.splice(i, 1);
         }
       } else {
+        pr.x += pr.vx * dt;
+        pr.y += pr.vy * dt;
+
+        if (
+          pr.x - pr.radius <= ARENA.left ||
+          pr.x + pr.radius >= ARENA.right ||
+          pr.y - pr.radius <= ARENA.top ||
+          pr.y + pr.radius >= ARENA.bottom
+        ) {
+          this.spawnSparks(pr.x, pr.y, -pr.vx, -pr.vy, pr.color, 3, 25, 75);
+          this.projectiles.splice(i, 1);
+          continue;
+        }
+
         // Red enemy projectile: damages player even while armored!
         if (len(this.player.x - pr.x, this.player.y - pr.y) <= this.player.radius + pr.radius) {
           const dir = normalize(pr.vx, pr.vy);
@@ -877,25 +954,25 @@ export class GameEngine {
         }
         case 'boss': {
           const targetAngle = Math.atan2(p.y - e.y, p.x - e.x);
-          e.angle = this.rotateToward(e.angle, targetAngle, dt * 1.15);
+          e.angle = this.rotateToward(e.angle, targetAngle, dt * 0.92);
 
           // Drift gently in upper/mid arena
           const anchorX = 135 + Math.sin(this.roomTimer * 0.7) * 52;
           const anchorY = 145 + Math.cos(this.roomTimer * 0.5) * 28;
           const toAnchor = normalizeOr(anchorX - e.x, anchorY - e.y, 0, 0);
           const anchorDist = len(anchorX - e.x, anchorY - e.y);
-          const moveSpeed = anchorDist > 6 ? 26 : 0;
+          const moveSpeed = anchorDist > 6 ? 24 : 0;
           e.vx += (toAnchor.x * moveSpeed - e.vx) * Math.min(1, dt * 3.5);
           e.vy += (toAnchor.y * moveSpeed - e.vy) * Math.min(1, dt * 3.5);
 
           e.stateTimer -= dt;
           if (e.bossPhase === 0 && e.stateTimer <= 0) {
             e.bossPhase = 1; // Telegraph radial burst
-            e.stateTimer = 0.65;
+            e.stateTimer = 0.7;
           } else if (e.bossPhase === 1 && e.stateTimer <= 0) {
             this.fireBossRadialBurst(e);
             e.bossPhase = 0;
-            e.stateTimer = 2.15;
+            e.stateTimer = 2.45;
           }
           break;
         }
@@ -998,7 +1075,7 @@ export class GameEngine {
   private fireBossRadialBurst(boss: Enemy): void {
     const burstIndex = (boss.bossBurstCount ?? 0) + 1;
     boss.bossBurstCount = burstIndex;
-    const count = 9 + Math.floor(this.roomNumber / 5);
+    const count = 8 + Math.floor(this.roomNumber / 5);
     const offset = (burstIndex % 2) * (Math.PI / count);
 
     for (let i = 0; i < count; i++) {
@@ -1010,8 +1087,8 @@ export class GameEngine {
         fromPlayer: false,
         x: boss.x + bx * (boss.radius + 2),
         y: boss.y + by * (boss.radius + 2),
-        vx: bx * 145,
-        vy: by * 145,
+        vx: bx * 132,
+        vy: by * 132,
         radius: 3.5,
         damage: 1,
         life: 3.6,
@@ -1181,7 +1258,7 @@ export class GameEngine {
       return;
     }
 
-    const isWeakspotCrit = enemy.kind === 'boss' && !ignoreShield;
+    const isWeakspotCrit = enemy.kind === 'boss' && !ignoreShield && dmg >= 2;
     const totalDmg = dmg + (isWeakspotCrit ? 1 : 0);
     enemy.hp -= totalDmg;
     enemy.hitFlash = 0.12;
@@ -1216,6 +1293,8 @@ export class GameEngine {
   }
 
   private deflectOffBossShield(x: number, y: number): void {
+    if (this.timeElapsed - this.lastShieldDeflectTime < 0.08) return;
+    this.lastShieldDeflectTime = this.timeElapsed;
     this.audio.playShieldDeflect();
     this.spawnSparks(x, y, 0, 1, COLORS.bossShield, 7, 50, 120);
     this.addFloatingText(x, y - 10, 'DEFLECT!', COLORS.bossShield, 0.85);

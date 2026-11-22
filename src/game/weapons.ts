@@ -12,9 +12,11 @@ import {
   Sawblade,
   Vec2,
   WeaponId,
+  WeaponModId,
 } from './entities';
 import {
   clamp,
+  isBossFrontShieldHit,
   len,
   normalizeOr,
   raycastArena,
@@ -51,6 +53,79 @@ export const WEAPON_META: Record<
   },
 };
 
+export const WEAPON_MOD_META: Record<
+  WeaponModId,
+  { weapon: WeaponId; title: string; description: string }
+> = {
+  rail_beams: {
+    weapon: 'railgun',
+    title: 'Split Prism',
+    description: '+1 angled laser beam per shot.',
+  },
+  rail_width: {
+    weapon: 'railgun',
+    title: 'Overcharged Bore',
+    description: '+2.5px beam width and +1 laser damage.',
+  },
+  rail_bounce: {
+    weapon: 'railgun',
+    title: 'Mirror Lens',
+    description: 'Laser beam reflects +1 time off arena walls.',
+  },
+  shot_pellets: {
+    weapon: 'shotgun',
+    title: 'Buckshot Drum',
+    description: '+3 pellets per blast with denser spread.',
+  },
+  shot_bounce: {
+    weapon: 'shotgun',
+    title: 'Rubber Slugs',
+    description: 'Pellets bounce +1 time off walls and fly farther.',
+  },
+  shot_caliber: {
+    weapon: 'shotgun',
+    title: 'Heavy Slugs',
+    description: '+1 pellet damage and heavier knockback.',
+  },
+  saw_count: {
+    weapon: 'sawblade',
+    title: 'Twin Blades',
+    description: 'Launches +1 extra spinning sawblade.',
+  },
+  saw_bounce: {
+    weapon: 'sawblade',
+    title: 'Perpetual Edge',
+    description: '+2 wall bounces and +12% blade speed.',
+  },
+  saw_size: {
+    weapon: 'sawblade',
+    title: 'Giant Buzzsaw',
+    description: '+2.5px blade radius and +1 slice damage.',
+  },
+  arc_jumps: {
+    weapon: 'arccoil',
+    title: 'Tesla Relay',
+    description: '+2 lightning chain jumps and +20px chain reach.',
+  },
+  arc_fork: {
+    weapon: 'arccoil',
+    title: 'Dual Emitter',
+    description: 'Fires +1 extra forward lightning arc.',
+  },
+  arc_overload: {
+    weapon: 'arccoil',
+    title: 'High Voltage',
+    description: '+1 shock damage and +24px forward range.',
+  },
+};
+
+export const WEAPON_MODS_BY_WEAPON: Record<WeaponId, readonly WeaponModId[]> = {
+  railgun: ['rail_beams', 'rail_width', 'rail_bounce'],
+  shotgun: ['shot_pellets', 'shot_bounce', 'shot_caliber'],
+  sawblade: ['saw_count', 'saw_bounce', 'saw_size'],
+  arccoil: ['arc_jumps', 'arc_fork', 'arc_overload'],
+};
+
 export interface WeaponFireContext {
   player: PlayerState;
   enemies: Enemy[];
@@ -75,17 +150,24 @@ export interface WeaponFireContext {
   playWeaponSfx: (weapon: WeaponId, tier: number) => void;
 }
 
-function getTierColor(tier: number, fallback: string): string {
-  switch (tier) {
-    case 1:
-      return COLORS.charge1;
-    case 2:
-      return COLORS.charge2;
-    case 3:
-      return COLORS.charge3;
-    default:
-      return fallback;
-  }
+function getModRank(player: PlayerState, modId: WeaponModId): number {
+  return clamp(player.weaponMods?.[modId] ?? 0, 0, COMBAT.MAX_WEAPON_MOD_RANK);
+}
+
+function rotateVec(dx: number, dy: number, angleRad: number): Vec2 {
+  if (angleRad === 0) return { x: dx, y: dy };
+  const c = Math.cos(angleRad);
+  const s = Math.sin(angleRad);
+  return {
+    x: dx * c - dy * s,
+    y: dx * s + dy * c,
+  };
+}
+
+function getSpreadOffsetsDeg(rank: number, rank1Deg: number, rank2Deg: number): number[] {
+  if (rank <= 0) return [0];
+  if (rank === 1) return [(-rank1Deg * Math.PI) / 180, (rank1Deg * Math.PI) / 180];
+  return [(-rank2Deg * Math.PI) / 180, 0, (rank2Deg * Math.PI) / 180];
 }
 
 function spawnSparks(
@@ -157,80 +239,122 @@ function fireRailgun(
   tier: number,
 ): void {
   const { player } = ctx;
-  const path = raycastArena(player.x, player.y, dx, dy, 0, 0);
-  const end = path[path.length - 1] ?? {
-    x: player.x + dx * 480,
-    y: player.y + dy * 480,
-  };
+  const beamsRank = getModRank(player, 'rail_beams');
+  const widthRank = getModRank(player, 'rail_width');
+  const bounceRank = getModRank(player, 'rail_bounce');
 
-  const width = 2 + tier * 1.5;
-  const dmg = 2 + tier * 2;
+  const beamOffsets = getSpreadOffsetsDeg(beamsRank, 5, 6.5);
+  const width = 2 + tier * 1.5 + widthRank * 2.5;
+  const dmg = 2 + tier * 2 + widthRank;
+  const repeatHitDmg = Math.max(1, Math.floor(dmg * 0.4));
   const hitstop =
     tier >= 2 ? COMBAT.HITSTOP_HEAVY_SEC : COMBAT.HITSTOP_LIGHT_SEC;
-  const color =
-    tier >= 2 ? getTierColor(tier, WEAPON_META.railgun.color) : WEAPON_META.railgun.color;
+  const color = COLORS.playerBullet;
   const beamHalfWidth = width * 0.5 + 1.5;
-
-  ctx.beams.push({
-    x1: player.x,
-    y1: player.y,
-    x2: end.x,
-    y2: end.y,
-    width,
-    color,
-    life: 0.18 + tier * 0.03,
-    maxLife: 0.18 + tier * 0.03,
-  });
-
-  let hitSomething = false;
   const kbSpeed = 110 + tier * 25;
 
-  for (const enemy of [...ctx.enemies]) {
-    if (enemy.hp <= 0) continue;
-    if (
-      segmentCircleIntersect(
-        player.x,
-        player.y,
-        end.x,
-        end.y,
-        enemy.x,
-        enemy.y,
-        enemy.radius + beamHalfWidth,
-      )
-    ) {
-      hitSomething = true;
-      ctx.onDamageEnemy(
-        enemy,
-        dmg,
-        dx * kbSpeed,
-        dy * kbSpeed,
-        player.x,
-        player.y,
-      );
-      spawnSparks(ctx.particles, enemy.x, enemy.y, dx, dy, color, 6, 60, 170, 1.8);
-    }
-  }
+  let hitSomething = false;
+  const hitEnemies = new Set<number>();
+  const hitHazards = new Set<number>();
 
-  for (const hazard of [...ctx.hazards]) {
-    if (hazard.triggered) continue;
-    if (
-      segmentCircleIntersect(
-        player.x,
-        player.y,
-        end.x,
-        end.y,
-        hazard.x,
-        hazard.y,
-        hazard.radius + beamHalfWidth,
-      )
-    ) {
-      hitSomething = true;
-      ctx.onHitHazard(hazard, player.x, player.y);
+  for (const offsetRad of beamOffsets) {
+    const beamDir = rotateVec(dx, dy, offsetRad);
+    const rawPath = raycastArena(player.x, player.y, beamDir.x, beamDir.y, bounceRank, 0);
+    const path =
+      rawPath.length >= 2
+        ? rawPath
+        : [
+            { x: player.x, y: player.y },
+            { x: player.x + beamDir.x * 480, y: player.y + beamDir.y * 480 },
+          ];
+
+    for (let s = 0; s < path.length - 1; s++) {
+      const segStart = path[s];
+      const segEnd = path[s + 1];
+      const segDir = normalizeOr(
+        segEnd.x - segStart.x,
+        segEnd.y - segStart.y,
+        beamDir.x,
+        beamDir.y,
+      );
+
+      ctx.beams.push({
+        x1: segStart.x,
+        y1: segStart.y,
+        x2: segEnd.x,
+        y2: segEnd.y,
+        width,
+        color,
+        life: 0.18 + tier * 0.03,
+        maxLife: 0.18 + tier * 0.03,
+      });
+
+      for (const enemy of [...ctx.enemies]) {
+        if (enemy.hp <= 0) continue;
+        if (
+          segmentCircleIntersect(
+            segStart.x,
+            segStart.y,
+            segEnd.x,
+            segEnd.y,
+            enemy.x,
+            enemy.y,
+            enemy.radius + beamHalfWidth,
+          )
+        ) {
+          hitSomething = true;
+          const hitDmg = hitEnemies.has(enemy.id) ? repeatHitDmg : dmg;
+          ctx.onDamageEnemy(
+            enemy,
+            hitDmg,
+            segDir.x * kbSpeed,
+            segDir.y * kbSpeed,
+            segStart.x,
+            segStart.y,
+          );
+          if (!(enemy.kind === 'boss' && isBossFrontShieldHit(enemy, segStart.x, segStart.y))) {
+            hitEnemies.add(enemy.id);
+          }
+          spawnSparks(ctx.particles, enemy.x, enemy.y, segDir.x, segDir.y, color, 6, 60, 170, 1.8);
+        }
+      }
+
+      for (const hazard of [...ctx.hazards]) {
+        if (hazard.triggered || hitHazards.has(hazard.id)) continue;
+        if (
+          segmentCircleIntersect(
+            segStart.x,
+            segStart.y,
+            segEnd.x,
+            segEnd.y,
+            hazard.x,
+            hazard.y,
+            hazard.radius + beamHalfWidth,
+          )
+        ) {
+          hitSomething = true;
+          hitHazards.add(hazard.id);
+          ctx.onHitHazard(hazard, segStart.x, segStart.y);
+        }
+      }
+
+      const isFinalSegment = s === path.length - 2;
+      spawnSparks(
+        ctx.particles,
+        segEnd.x,
+        segEnd.y,
+        -segDir.x,
+        -segDir.y,
+        color,
+        isFinalSegment ? 8 : 5,
+        50,
+        150,
+        2.2,
+      );
     }
   }
 
   spawnSparks(ctx.particles, player.x, player.y, dx, dy, color, 6, 70, 160, 1.1);
-  spawnSparks(ctx.particles, end.x, end.y, -dx, -dy, color, 8, 50, 150, 2.2);
 
   if (hitSomething) {
     ctx.onHitstop(hitstop);
@@ -245,14 +369,18 @@ function fireShotgun(
   tier: number,
 ): void {
   const { player } = ctx;
-  const pelletCount = 5 + tier * 2;
-  const totalSpread = (36 * Math.PI) / 180;
+  const pelletsRank = getModRank(player, 'shot_pellets');
+  const shotBounceRank = getModRank(player, 'shot_bounce');
+  const caliberRank = getModRank(player, 'shot_caliber');
+
+  const pelletCount = 5 + tier * 2 + pelletsRank * 3;
+  const totalSpread = ((36 - pelletsRank * 2) * Math.PI) / 180;
   const baseAngle = Math.atan2(dy, dx);
-  const dmg = 1 + (tier >= 2 ? 1 : 0);
+  const dmg = 1 + (tier >= 3 ? 1 : 0) + caliberRank;
+  const knockback = 185 + tier * 30 + caliberRank * 45;
   const speed = 390;
-  const life = 0.24;
-  const color =
-    tier >= 2 ? getTierColor(tier, WEAPON_META.shotgun.color) : WEAPON_META.shotgun.color;
+  const life = 0.25 + shotBounceRank * 0.16;
+  const color = COLORS.playerBullet;
   const spawnOffset = player.radius + 3;
 
   for (let i = 0; i < pelletCount; i++) {
@@ -273,8 +401,10 @@ function fireShotgun(
       damage: dmg,
       life,
       color,
-      knockback: 185 + tier * 30,
+      knockback,
       fromCharge: tier >= 1,
+      bouncesLeft: shotBounceRank,
+      bouncesDone: 0,
     });
   }
 
@@ -305,62 +435,72 @@ function fireSawblade(
   tier: number,
 ): void {
   const { player } = ctx;
-  const speed = 340 + tier * 30;
-  const bouncesLeft = 2 + tier;
-  const damage = 2 + tier;
-  const radius = 7 + (tier >= 2 ? 1 : 0);
+  const countRank = getModRank(player, 'saw_count');
+  const bounceRank = getModRank(player, 'saw_bounce');
+  const sizeRank = getModRank(player, 'saw_size');
 
-  const spawnX = clamp(
-    player.x + dx * (player.radius + radius + 2),
-    ARENA.left + radius,
-    ARENA.right - radius,
-  );
-  const spawnY = clamp(
-    player.y + dy * (player.radius + radius + 2),
-    ARENA.top + radius,
-    ARENA.bottom - radius,
-  );
+  const bladeOffsets = getSpreadOffsetsDeg(countRank, 11, 14);
+  const speed = (340 + tier * 30) * (1 + bounceRank * 0.12);
+  const bouncesLeft = 2 + tier + bounceRank * 2;
+  const damage = 2 + tier + sizeRank;
+  const radius = 7 + (tier >= 2 ? 1 : 0) + sizeRank * 2.5;
+  const color = COLORS.playerBullet;
 
-  ctx.sawblades.push({
-    id: allocEntityId(),
-    x: spawnX,
-    y: spawnY,
-    vx: dx * speed,
-    vy: dy * speed,
-    radius,
-    damage,
-    bouncesLeft,
-    bouncesDone: 0,
-    fromCharge: tier >= 1,
-    spin: 0,
-    hitCooldowns: new Map<number, number>(),
-  });
+  for (const offsetRad of bladeOffsets) {
+    const bladeDir = rotateVec(dx, dy, offsetRad);
+    const spawnX = clamp(
+      player.x + bladeDir.x * (player.radius + radius + 2),
+      ARENA.left + radius,
+      ARENA.right - radius,
+    );
+    const spawnY = clamp(
+      player.y + bladeDir.y * (player.radius + radius + 2),
+      ARENA.top + radius,
+      ARENA.bottom - radius,
+    );
 
-  const color = getTierColor(tier, WEAPON_META.sawblade.color);
-  spawnSparks(ctx.particles, spawnX, spawnY, dx, dy, color, 6, 50, 140, 1.4);
+    ctx.sawblades.push({
+      id: allocEntityId(),
+      x: spawnX,
+      y: spawnY,
+      vx: bladeDir.x * speed,
+      vy: bladeDir.y * speed,
+      radius,
+      damage,
+      bouncesLeft,
+      bouncesDone: 0,
+      fromCharge: tier >= 1,
+      spin: 0,
+      hitCooldowns: new Map<number, number>(),
+    });
+
+    spawnSparks(ctx.particles, spawnX, spawnY, bladeDir.x, bladeDir.y, color, 6, 50, 140, 1.4);
+  }
+
   ctx.onShake(dx, dy, 1.8 + tier * 0.6);
 }
 
-function fireArcCoil(
+function pickForwardArcTarget(
   ctx: WeaponFireContext,
   dx: number,
   dy: number,
-  tier: number,
-): void {
+  range: number,
+  claimedEnemies: Set<number>,
+  claimedHazards: Set<number>,
+  preferUnclaimed: boolean,
+): {
+  bestEnemy: Enemy | null;
+  bestEnemyDist: number;
+  bestHazard: Hazard | null;
+  bestHazardDist: number;
+} {
   const { player } = ctx;
-  const range = 92 + tier * 18;
-  const chainRange = 95;
-  const maxJumps = 2 + tier;
-  const primaryDmg = 2 + tier;
-  const chainDmg = 1 + tier;
-  const color =
-    tier >= 2 ? getTierColor(tier, WEAPON_META.arccoil.color) : WEAPON_META.arccoil.color;
-
-  // Find nearest forward target (enemies prioritized, hazards also checked)
   let bestEnemy: Enemy | null = null;
   let bestEnemyDist = Infinity;
 
   for (const enemy of ctx.enemies) {
+    if (enemy.hp <= 0) continue;
+    if (preferUnclaimed && claimedEnemies.has(enemy.id)) continue;
     const ox = enemy.x - player.x;
     const oy = enemy.y - player.y;
     const dist = len(ox, oy);
@@ -380,6 +520,7 @@ function fireArcCoil(
   let bestHazardDist = Infinity;
   for (const hazard of ctx.hazards) {
     if (hazard.triggered || hazard.kind !== 'barrel') continue;
+    if (preferUnclaimed && claimedHazards.has(hazard.id)) continue;
     const ox = hazard.x - player.x;
     const oy = hazard.y - player.y;
     const dist = len(ox, oy);
@@ -395,166 +536,244 @@ function fireArcCoil(
     }
   }
 
-  const hitEnemies = new Set<number>();
-  let anchorX = player.x;
-  let anchorY = player.y;
-  let jumpsUsed = 0;
+  return { bestEnemy, bestEnemyDist, bestHazard, bestHazardDist };
+}
 
-  // Trigger explosive barrel if it is closer than the primary enemy or no enemy was found
-  if (bestHazard && (!bestEnemy || bestHazardDist < bestEnemyDist)) {
-    ctx.arcs.push({
-      points: buildJaggedArc(player.x, player.y, bestHazard.x, bestHazard.y, 5, 7),
-      life: 0.18,
-      maxLife: 0.18,
-      color,
-    });
-    ctx.onHitHazard(bestHazard, player.x, player.y);
-    spawnSparks(
-      ctx.particles,
-      bestHazard.x,
-      bestHazard.y,
+function fireArcCoil(
+  ctx: WeaponFireContext,
+  dx: number,
+  dy: number,
+  tier: number,
+): void {
+  const { player } = ctx;
+  const jumpsRank = getModRank(player, 'arc_jumps');
+  const forkRank = getModRank(player, 'arc_fork');
+  const overloadRank = getModRank(player, 'arc_overload');
+
+  const range = 104 + tier * 18 + overloadRank * 24;
+  const chainRange = 105 + jumpsRank * 20;
+  const maxJumps = 2 + tier + jumpsRank * 2;
+  const primaryDmg = 2 + tier + overloadRank;
+  const chainDmg = 1 + tier + overloadRank;
+  const forkCount = 1 + forkRank;
+  const color = COLORS.playerBullet;
+
+  const claimedPrimaryEnemies = new Set<number>();
+  const claimedPrimaryHazards = new Set<number>();
+  const everHitEnemies = new Set<number>();
+  let anyEnemyHit = false;
+
+  for (let f = 0; f < forkCount; f++) {
+    let target = pickForwardArcTarget(
+      ctx,
       dx,
       dy,
-      color,
-      6,
-      50,
-      140,
-      Math.PI * 2,
+      range,
+      claimedPrimaryEnemies,
+      claimedPrimaryHazards,
+      true,
     );
-    anchorX = bestHazard.x;
-    anchorY = bestHazard.y;
-    jumpsUsed++;
-
-    // Re-check if bestEnemy survived the barrel detonation
-    if (bestEnemy && bestEnemy.hp <= 0) {
-      bestEnemy = null;
+    if (!target.bestEnemy && !target.bestHazard) {
+      target = pickForwardArcTarget(
+        ctx,
+        dx,
+        dy,
+        range,
+        claimedPrimaryEnemies,
+        claimedPrimaryHazards,
+        false,
+      );
     }
-  }
 
-  if (bestEnemy && bestEnemy.hp > 0 && jumpsUsed < maxJumps) {
-    const isPrimary = jumpsUsed === 0;
-    const dmg = isPrimary ? primaryDmg : chainDmg;
-    const pushDir = normalizeOr(
-      bestEnemy.x - anchorX,
-      bestEnemy.y - anchorY,
-      dx,
-      dy,
-    );
-    const kb = isPrimary ? 105 + tier * 20 : 70 + tier * 15;
+    let { bestEnemy } = target;
+    const { bestEnemyDist, bestHazard, bestHazardDist } = target;
 
-    ctx.arcs.push({
-      points: buildJaggedArc(anchorX, anchorY, bestEnemy.x, bestEnemy.y, 5, 8),
-      life: 0.2,
-      maxLife: 0.2,
-      color,
-    });
-    ctx.rings.push({
-      x: bestEnemy.x,
-      y: bestEnemy.y,
-      radius: 4,
-      maxRadius: 24 + tier * 4,
-      color,
-      life: 0.18,
-      maxLife: 0.18,
-    });
+    const hitEnemies = new Set<number>();
+    let anchorX = player.x;
+    let anchorY = player.y;
+    let jumpsUsed = 0;
 
-    hitEnemies.add(bestEnemy.id);
-    jumpsUsed++;
-    anchorX = bestEnemy.x;
-    anchorY = bestEnemy.y;
+    // Trigger explosive barrel if it is closer than the primary enemy or no enemy was found
+    if (bestHazard && (!bestEnemy || bestHazardDist < bestEnemyDist)) {
+      claimedPrimaryHazards.add(bestHazard.id);
+      ctx.arcs.push({
+        points: buildJaggedArc(player.x, player.y, bestHazard.x, bestHazard.y, 5, 7),
+        life: 0.18,
+        maxLife: 0.18,
+        color,
+      });
+      ctx.onHitHazard(bestHazard, player.x, player.y);
+      spawnSparks(
+        ctx.particles,
+        bestHazard.x,
+        bestHazard.y,
+        dx,
+        dy,
+        color,
+        6,
+        50,
+        140,
+        Math.PI * 2,
+      );
+      anchorX = bestHazard.x;
+      anchorY = bestHazard.y;
+      jumpsUsed++;
 
-    ctx.onDamageEnemy(
-      bestEnemy,
-      dmg,
-      pushDir.x * kb,
-      pushDir.y * kb,
-      player.x,
-      player.y,
-    );
-    spawnSparks(
-      ctx.particles,
-      bestEnemy.x,
-      bestEnemy.y,
-      pushDir.x,
-      pushDir.y,
-      color,
-      7,
-      60,
-      160,
-      Math.PI * 2,
-    );
-  }
-
-  // Chain lightning to nearby enemies
-  while (jumpsUsed < maxJumps) {
-    let nextEnemy: Enemy | null = null;
-    let nextDist = Infinity;
-
-    for (const candidate of ctx.enemies) {
-      if (hitEnemies.has(candidate.id) || candidate.hp <= 0) continue;
-      const d = len(candidate.x - anchorX, candidate.y - anchorY);
-      if (d <= chainRange + candidate.radius && d < nextDist) {
-        nextDist = d;
-        nextEnemy = candidate;
+      // Re-check if bestEnemy survived the barrel detonation
+      if (bestEnemy && bestEnemy.hp <= 0) {
+        bestEnemy = null;
       }
     }
 
-    if (!nextEnemy) break;
+    if (bestEnemy && bestEnemy.hp > 0 && jumpsUsed < maxJumps) {
+      const isPrimary = jumpsUsed === 0;
+      const baseDmg = isPrimary ? primaryDmg : chainDmg;
+      const dmg = everHitEnemies.has(bestEnemy.id)
+        ? Math.max(1, Math.floor(baseDmg * 0.5))
+        : baseDmg;
+      const pushDir = normalizeOr(
+        bestEnemy.x - anchorX,
+        bestEnemy.y - anchorY,
+        dx,
+        dy,
+      );
+      const kb = isPrimary ? 105 + tier * 20 : 70 + tier * 15;
 
-    const pushDir = normalizeOr(
-      nextEnemy.x - anchorX,
-      nextEnemy.y - anchorY,
-      dx,
-      dy,
-    );
-    const kb = 70 + tier * 15;
+      ctx.arcs.push({
+        points: buildJaggedArc(anchorX, anchorY, bestEnemy.x, bestEnemy.y, 5, 8),
+        life: 0.2,
+        maxLife: 0.2,
+        color,
+      });
+      ctx.rings.push({
+        x: bestEnemy.x,
+        y: bestEnemy.y,
+        radius: 4,
+        maxRadius: 24 + tier * 4,
+        color,
+        life: 0.18,
+        maxLife: 0.18,
+      });
 
-    ctx.arcs.push({
-      points: buildJaggedArc(anchorX, anchorY, nextEnemy.x, nextEnemy.y, 4, 7),
-      life: 0.19,
-      maxLife: 0.19,
-      color,
-    });
-    ctx.rings.push({
-      x: nextEnemy.x,
-      y: nextEnemy.y,
-      radius: 3,
-      maxRadius: 18 + tier * 3,
-      color,
-      life: 0.16,
-      maxLife: 0.16,
-    });
+      claimedPrimaryEnemies.add(bestEnemy.id);
+      hitEnemies.add(bestEnemy.id);
+      everHitEnemies.add(bestEnemy.id);
+      anyEnemyHit = true;
+      jumpsUsed++;
+      const prevX = anchorX;
+      const prevY = anchorY;
+      anchorX = bestEnemy.x;
+      anchorY = bestEnemy.y;
 
-    hitEnemies.add(nextEnemy.id);
-    jumpsUsed++;
-    const prevX = anchorX;
-    const prevY = anchorY;
-    anchorX = nextEnemy.x;
-    anchorY = nextEnemy.y;
+      ctx.onDamageEnemy(
+        bestEnemy,
+        dmg,
+        pushDir.x * kb,
+        pushDir.y * kb,
+        prevX,
+        prevY,
+      );
+      spawnSparks(
+        ctx.particles,
+        bestEnemy.x,
+        bestEnemy.y,
+        pushDir.x,
+        pushDir.y,
+        color,
+        7,
+        60,
+        160,
+        Math.PI * 2,
+      );
+    }
 
-    ctx.onDamageEnemy(
-      nextEnemy,
-      chainDmg,
-      pushDir.x * kb,
-      pushDir.y * kb,
-      prevX,
-      prevY,
-    );
-    spawnSparks(
-      ctx.particles,
-      nextEnemy.x,
-      nextEnemy.y,
-      pushDir.x,
-      pushDir.y,
-      color,
-      5,
-      50,
-      140,
-      Math.PI * 2,
-    );
+    // Chain lightning to nearby enemies
+    while (jumpsUsed < maxJumps) {
+      let nextEnemy: Enemy | null = null;
+      let nextDist = Infinity;
+
+      for (const candidate of ctx.enemies) {
+        if (hitEnemies.has(candidate.id) || candidate.hp <= 0) continue;
+        const d = len(candidate.x - anchorX, candidate.y - anchorY);
+        if (d <= chainRange + candidate.radius && d < nextDist) {
+          nextDist = d;
+          nextEnemy = candidate;
+        }
+      }
+
+      if (!nextEnemy) break;
+
+      const pushDir = normalizeOr(
+        nextEnemy.x - anchorX,
+        nextEnemy.y - anchorY,
+        dx,
+        dy,
+      );
+      const kb = 70 + tier * 15;
+
+      ctx.arcs.push({
+        points: buildJaggedArc(anchorX, anchorY, nextEnemy.x, nextEnemy.y, 4, 7),
+        life: 0.19,
+        maxLife: 0.19,
+        color,
+      });
+      ctx.rings.push({
+        x: nextEnemy.x,
+        y: nextEnemy.y,
+        radius: 3,
+        maxRadius: 18 + tier * 3,
+        color,
+        life: 0.16,
+        maxLife: 0.16,
+      });
+
+      hitEnemies.add(nextEnemy.id);
+      anyEnemyHit = true;
+      jumpsUsed++;
+      const prevX = anchorX;
+      const prevY = anchorY;
+      anchorX = nextEnemy.x;
+      anchorY = nextEnemy.y;
+
+      ctx.onDamageEnemy(
+        nextEnemy,
+        chainDmg,
+        pushDir.x * kb,
+        pushDir.y * kb,
+        prevX,
+        prevY,
+      );
+      spawnSparks(
+        ctx.particles,
+        nextEnemy.x,
+        nextEnemy.y,
+        pushDir.x,
+        pushDir.y,
+        color,
+        5,
+        50,
+        140,
+        Math.PI * 2,
+      );
+    }
+
+    if (jumpsUsed === 0) {
+      const reach = range * 0.72;
+      const spreadAngle = forkCount > 1 ? (f - (forkCount - 1) * 0.5) * 0.28 : 0;
+      const arcDir = rotateVec(dx, dy, spreadAngle);
+      const tipX = clamp(player.x + arcDir.x * reach, ARENA.left + 4, ARENA.right - 4);
+      const tipY = clamp(player.y + arcDir.y * reach, ARENA.top + 4, ARENA.bottom - 4);
+      ctx.arcs.push({
+        points: buildJaggedArc(player.x, player.y, tipX, tipY, 5, 8),
+        life: 0.15,
+        maxLife: 0.15,
+        color,
+      });
+      spawnSparks(ctx.particles, tipX, tipY, arcDir.x, arcDir.y, color, 5, 40, 120, 2.0);
+    }
   }
 
-  // Forward burst ring + fallback discharge arc if nothing was in range
+  // Forward burst ring
   const burstX = player.x + dx * (player.radius + 10);
   const burstY = player.y + dy * (player.radius + 10);
   ctx.rings.push({
@@ -567,18 +786,7 @@ function fireArcCoil(
     maxLife: 0.16,
   });
 
-  if (jumpsUsed === 0) {
-    const reach = range * 0.72;
-    const tipX = clamp(player.x + dx * reach, ARENA.left + 4, ARENA.right - 4);
-    const tipY = clamp(player.y + dy * reach, ARENA.top + 4, ARENA.bottom - 4);
-    ctx.arcs.push({
-      points: buildJaggedArc(player.x, player.y, tipX, tipY, 5, 8),
-      life: 0.15,
-      maxLife: 0.15,
-      color,
-    });
-    spawnSparks(ctx.particles, tipX, tipY, dx, dy, color, 5, 40, 120, 2.0);
-  } else if (hitEnemies.size > 0) {
+  if (anyEnemyHit) {
     ctx.onHitstop(tier >= 2 ? COMBAT.HITSTOP_LIGHT_SEC : 0.014);
   }
 
