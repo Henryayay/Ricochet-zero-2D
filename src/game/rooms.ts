@@ -38,6 +38,38 @@ export const PERK_META: Record<PerkId, { title: string; description: string }> =
     title: 'Higher Bounce Speed',
     description: '+12% wall bounce speed & max launch power.',
   },
+  air_drag_tune: {
+    title: 'Low-Friction Hull',
+    description: '-12% air drag so launches glide farther for extra banks.',
+  },
+  heavy_ram: {
+    title: 'Kinetic Bumper',
+    description: '+45 ram knockback and +1 Wall Slam bonus damage.',
+  },
+  quick_charge: {
+    title: 'Capacitor Banks',
+    description: '2nd wall bounce hits 3x MAX; Bumpers grant +2 Charge.',
+  },
+  overheat_vent: {
+    title: 'Thermal Sink',
+    description: 'Delays arena Overheat by +4 seconds.',
+  },
+  momentum_edge: {
+    title: 'Momentum Payload',
+    description: 'Fast Brake Tap (290+ px/s) deals +1 bonus damage.',
+  },
+  flow_surge: {
+    title: 'Adrenaline Flow',
+    description: 'Flow cap 7.0x; no-hit clears grant +1.0 Flow.',
+  },
+  vital_core: {
+    title: 'Reinforced Core',
+    description: '+1 Max HP (up to 4) and restores +1 HP.',
+  },
+  field_repair: {
+    title: 'Nano Patch',
+    description: 'Restores +1 HP immediately.',
+  },
 };
 
 export interface RoomSpawnResult {
@@ -59,6 +91,14 @@ const ALL_PERKS: PerkId[] = [
   'longer_focus',
   'max_shield',
   'bounce_speed',
+  'air_drag_tune',
+  'heavy_ram',
+  'quick_charge',
+  'overheat_vent',
+  'momentum_edge',
+  'flow_surge',
+  'vital_core',
+  'field_repair',
 ];
 
 function randRange(min: number, max: number): number {
@@ -439,14 +479,18 @@ function makeWeaponModOption(modId: WeaponModId, currentRank: number): DraftOpti
   };
 }
 
-function makePerkOption(perkId: PerkId): DraftOption {
+function makePerkOption(perkId: PerkId, currentRank = 0): DraftOption {
   const meta = PERK_META[perkId];
+  const maxRank = PERK_MAX_RANKS[perkId];
+  const rankLabel =
+    maxRank > 1 && maxRank < 99 ? `Rank ${currentRank + 1}/${maxRank}` : undefined;
   return {
     id: `perk_${perkId}`,
     kind: 'perk',
     perkId,
     title: meta.title,
     description: meta.description,
+    ...(rankLabel ? { rankLabel } : {}),
   };
 }
 
@@ -492,6 +536,12 @@ export function generateDraftOptions(
     if (id === 'max_shield' && player.maxShield >= COMBAT.HARD_MAX_SHIELD) {
       return false;
     }
+    if (id === 'vital_core' && player.maxHp >= COMBAT.HARD_MAX_HP) {
+      return false;
+    }
+    if (id === 'field_repair' && player.hp >= player.maxHp) {
+      return false;
+    }
     return true;
   });
   const shuffledPerks = shuffled(eligiblePerks);
@@ -511,22 +561,31 @@ export function generateDraftOptions(
     options.push(opt);
     usedIds.add(opt.id);
   } else if (shuffledPerks.length > 0) {
-    const opt = makePerkOption(shuffledPerks[0]);
+    const perkId = shuffledPerks[0];
+    const opt = makePerkOption(perkId, player.perks?.[perkId] ?? 0);
     options.push(opt);
     usedIds.add(opt.id);
   }
 
-  // Option B: Weapon swap to one of the other 3 weapons
-  if (otherWeapons.length > 0) {
+  // Option B: Occasionally (~40% chance) offer a weapon swap; otherwise pick another distinct perk
+  if (otherWeapons.length > 0 && Math.random() < 0.4) {
     const opt = makeWeaponSwapOption(otherWeapons[0], budget);
     options.push(opt);
     usedIds.add(opt.id);
+  } else {
+    for (const perkId of shuffledPerks) {
+      const opt = makePerkOption(perkId, player.perks?.[perkId] ?? 0);
+      if (usedIds.has(opt.id)) continue;
+      options.push(opt);
+      usedIds.add(opt.id);
+      break;
+    }
   }
 
-  // Option C: Eligible utility perk (ensure distinct IDs)
+  // Option C: Fill remaining slots up to 3 with distinct eligible utility perks
   for (const perkId of shuffledPerks) {
     if (options.length >= 3) break;
-    const opt = makePerkOption(perkId);
+    const opt = makePerkOption(perkId, player.perks?.[perkId] ?? 0);
     if (usedIds.has(opt.id)) continue;
     options.push(opt);
     usedIds.add(opt.id);

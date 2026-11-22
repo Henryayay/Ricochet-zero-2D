@@ -148,6 +148,7 @@ export interface WeaponFireContext {
   onHitstop: (sec: number) => void;
   onShake: (dx: number, dy: number, intensity: number) => void;
   playWeaponSfx: (weapon: WeaponId, tier: number) => void;
+  bonusDamage?: number;
 }
 
 function getModRank(player: PlayerState, modId: WeaponModId): number {
@@ -245,7 +246,8 @@ function fireRailgun(
 
   const beamOffsets = getSpreadOffsetsDeg(beamsRank, 3.5, 3.5);
   const width = 2 + tier * 1.5 + widthRank * 2;
-  const dmg = 2 + tier * 2 + widthRank;
+  const bonus = Math.max(0, ctx.bonusDamage ?? 0);
+  const dmg = 2 + tier * 2 + widthRank + bonus;
   const repeatHitDmg = Math.max(1, Math.floor(dmg * 0.4));
   const hitstop =
     tier >= 2 ? COMBAT.HITSTOP_HEAVY_SEC : COMBAT.HITSTOP_LIGHT_SEC;
@@ -376,7 +378,9 @@ function fireShotgun(
   const pelletCount = 4 + tier + pelletsRank * 2;
   const totalSpread = ((26 - pelletsRank * 4) * Math.PI) / 180;
   const baseAngle = Math.atan2(dy, dx);
+  const bonus = Math.max(0, ctx.bonusDamage ?? 0);
   const dmg = 1 + (tier >= 3 ? 1 : 0) + caliberRank;
+  const centerPelletIdx = Math.floor(pelletCount / 2);
   const knockback = 185 + tier * 30 + caliberRank * 45;
   const speed = 390;
   const life = 0.25 + shotBounceRank * 0.14;
@@ -398,7 +402,7 @@ function fireShotgun(
       vx,
       vy,
       radius: 2.5,
-      damage: dmg,
+      damage: dmg + (i === centerPelletIdx ? bonus : 0),
       life,
       color,
       knockback,
@@ -442,11 +446,13 @@ function fireSawblade(
   const bladeOffsets = getSpreadOffsetsDeg(countRank, 8, 8);
   const speed = (340 + tier * 30) * (1 + bounceRank * 0.12);
   const bouncesLeft = 2 + tier + bounceRank;
-  const damage = 2 + tier + sizeRank;
+  const bonus = Math.max(0, ctx.bonusDamage ?? 0);
+  const baseDamage = 2 + tier + sizeRank;
   const radius = 7 + (tier >= 2 ? 1 : 0) + sizeRank * 2;
   const color = COLORS.playerBullet;
 
-  for (const offsetRad of bladeOffsets) {
+  for (let i = 0; i < bladeOffsets.length; i++) {
+    const offsetRad = bladeOffsets[i];
     const bladeDir = rotateVec(dx, dy, offsetRad);
     const spawnX = clamp(
       player.x + bladeDir.x * (player.radius + radius + 2),
@@ -466,7 +472,7 @@ function fireSawblade(
       vx: bladeDir.x * speed,
       vy: bladeDir.y * speed,
       radius,
-      damage,
+      damage: baseDamage + (i === 0 ? bonus : 0),
       bouncesLeft,
       bouncesDone: 0,
       fromCharge: tier >= 1,
@@ -560,7 +566,8 @@ function fireArcCoil(
   const range = 104 + tier * 18 + overloadRank * 18;
   const chainRange = 105 + jumpsRank * 18;
   const maxJumps = 2 + tier + jumpsRank;
-  const primaryDmg = 2 + tier + overloadRank;
+  const bonus = Math.max(0, ctx.bonusDamage ?? 0);
+  const primaryDmg = 2 + tier + overloadRank + bonus;
   const chainDmg = 1 + tier + overloadRank;
   const forkCount = 1 + forkRank;
   const color = COLORS.playerBullet;

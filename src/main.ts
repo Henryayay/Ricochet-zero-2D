@@ -163,7 +163,7 @@ function renderDraftOverlay(): string {
           ? 'WEAPON'
           : opt.kind === 'weapon_mod'
             ? opt.rankLabel ?? 'MOD'
-            : 'PERK';
+            : opt.rankLabel ?? 'PERK';
       return `
         <button class="draft-card ${opt.kind}" data-draft-idx="${idx}" type="button">
           <div class="draft-card-top">
@@ -184,6 +184,10 @@ function renderDraftOverlay(): string {
     ? `UPGRADE ${WEAPON_META[latestTransferWeapon!].name.toUpperCase()}`
     : `SHIELD RESTORED // DRAFT 1 UPGRADE (${engine.player.weaponUpgradeBudget}/${COMBAT.MAX_WEAPON_UPGRADES} MODS)`;
 
+  const skipButton = !isTransfer
+    ? `<button id="btn-skip-draft" class="draft-skip-btn" type="button">SKIP UPGRADE (+${Math.round(COMBAT.SKIP_DRAFT_BASE_BONUS * engine.flowMultiplier)} PTS)</button>`
+    : '';
+
   return `
     <div class="overlay-backdrop">
       <div class="draft-header">
@@ -191,6 +195,7 @@ function renderDraftOverlay(): string {
         <p>${sub}</p>
       </div>
       <div class="draft-cards">${cards}</div>
+      ${skipButton}
     </div>
   `;
 }
@@ -265,6 +270,9 @@ function renderUI(phase: GamePhase): void {
         const opt = latestDraft[idx];
         if (opt) engine.selectDraftOption(opt);
       });
+    });
+    document.getElementById('btn-skip-draft')?.addEventListener('click', () => {
+      engine.skipDraft();
     });
   } else if (phase === 'gameover') {
     document.getElementById('btn-restart')?.addEventListener('click', () => {

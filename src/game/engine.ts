@@ -367,13 +367,39 @@ export class GameEngine {
     this.setPhase('playing');
   }
 
+  skipDraft(): void {
+    if (this.phase !== 'draft' || this.pendingWeaponTransfers > 0) return;
+    this.audio.init();
+    this.audio.playDraftPick();
+    const bonus = Math.round(COMBAT.SKIP_DRAFT_BASE_BONUS * this.flowMultiplier);
+    this.score += bonus;
+    if (this.score > this.bestScore) this.bestScore = this.score;
+    this.savePersistentState();
+    this.roomNumber += 1;
+    this.loadRoom(this.roomNumber);
+    this.setPhase('playing');
+  }
+
   private applyPerk(perkId: PerkId): void {
     const cap = PERK_MAX_RANKS[perkId];
     this.player.perks[perkId] = Math.min(cap, (this.player.perks[perkId] ?? 0) + 1);
     if (perkId === 'max_shield') {
       this.player.maxShield = Math.min(COMBAT.HARD_MAX_SHIELD, this.player.maxShield + 1);
       this.player.shield = this.player.maxShield;
+    } else if (perkId === 'vital_core') {
+      this.player.maxHp = Math.min(COMBAT.HARD_MAX_HP, this.player.maxHp + 1);
+      this.player.hp = Math.min(this.player.maxHp, this.player.hp + 1);
+    } else if (perkId === 'field_repair') {
+      this.player.hp = Math.min(this.player.maxHp, this.player.hp + 1);
     }
+  }
+
+  private getOverheatDelaySec(): number {
+    return this.player.perks.overheat_vent * 4;
+  }
+
+  private getMaxFlowMultiplier(): number {
+    return 5.0 + this.player.perks.flow_surge * 2.0;
   }
 
   // ---- Input State Machine ----
@@ -485,6 +511,7 @@ export class GameEngine {
   }
 
   private executeBrakeAndFire(): void {
+    const preBrakeSpeed = len(this.player.vx, this.player.vy);
     const dir = normalizeOr(
       this.player.aimDirX,
       this.player.aimDirY,
@@ -496,6 +523,20 @@ export class GameEngine {
     this.player.vx = 0;
     this.player.vy = 0;
     this.player.armored = false;
+
+    const bonusDamage =
+      this.player.perks.momentum_edge > 0 && preBrakeSpeed >= COMBAT.MOMENTUM_EDGE_MIN_SPEED
+        ? 1
+        : 0;
+    if (bonusDamage > 0) {
+      this.addFloatingText(
+        this.player.x,
+        Math.max(ARENA.top + 12, this.player.y - 20),
+        'FAST SHOT!',
+        COLORS.textGold,
+        0.9,
+      );
+    }
 
     // Optional perk: Bullet-Clear Shockwave on Charged Brake Tap
     if (this.player.perks.brake_shockwave > 0 && this.player.chargeTier >= 1) {
@@ -545,6 +586,7 @@ export class GameEngine {
       arcs: this.arcs,
       rings: this.rings,
       particles: this.particles,
+      bonusDamage,
       onDamageEnemy: (enemy, dmg, kx, ky, sx, sy) =>
         this.damageEnemy(enemy, dmg, kx, ky, sx, sy, this.player.chargeTier >= 1),
       onHitHazard: (hazard, sx, sy) => this.hitHazard(hazard, sx, sy),
@@ -638,19 +680,17 @@ export class GameEngine {
   }
 
   private checkOverheatWarning(): void {
-    if (
-      this.roomTimer >= OVERHEAT.WARNING_START_SEC &&
-      this.roomTimer < OVERHEAT.OVERHEAT_START_SEC
-    ) {
-      const sec = Math.ceil(OVERHEAT.OVERHEAT_START_SEC - this.roomTimer);
+    const delay = this.getOverheatDelaySec();
+    const warnStart = OVERHEAT.WARNING_START_SEC + delay;
+    const overheatStart = OVERHEAT.OVERHEAT_START_SEC + delay;
+
+    if (this.roomTimer >= warnStart && this.roomTimer < overheatStart) {
+      const sec = Math.ceil(overheatStart - this.roomTimer);
       if (sec !== this.overheatWarnSecond) {
         this.overheatWarnSecond = sec;
         this.audio.playOverheatWarn();
       }
-    } else if (
-      this.roomTimer >= OVERHEAT.OVERHEAT_START_SEC &&
-      this.overheatWarnSecond !== 0
-    ) {
+    } else if (this.roomTimer >= overheatStart && this.overheatWarnSecond !== 0) {
       this.overheatWarnSecond = 0;
       this.audio.playOverheatWarn();
       this.addFloatingText(CANVAS_WIDTH / 2, 110, 'OVERHEAT!', COLORS.textRed, 1.15);
@@ -662,7 +702,8 @@ export class GameEngine {
     if (p.iframes > 0) p.iframes = Math.max(0, p.iframes - dt);
     if (p.flashTimer > 0) p.flashTimer = Math.max(0, p.flashTimer - dt);
 
-    const drag = Math.exp(-PHYSICS.PLAYER_DRAG * dt);
+    const effectiveDrag = PHYSICS.PLAYER_DRAG * Math.pow(0.88, p.perks.air_drag_tune);
+    const drag = Math.exp(-effectiveDrag * dt);
     p.vx *= drag;
     p.vy *= drag;
 
@@ -705,14 +746,15 @@ export class GameEngine {
 
     const wallRes = stepCircleArena(p, dt, this.getWallRestitution());
     if (wallRes.hitWall) {
-      const overheated = this.roomTimer >= OVERHEAT.OVERHEAT_START_SEC;
+      const overheated = this.roomTimer >= OVERHEAT.OVERHEAT_START_SEC + this.getOverheatDelaySec();
       if (overheated) {
         this.audio.playBounce(p.chargeTier, true);
         this.spawnSparks(p.x, p.y, wallRes.normalX, wallRes.normalY, COLORS.wallOverheat, 8, 60, 140);
         this.damagePlayer(1, wallRes.normalX, wallRes.normalY);
       } else if (p.armored) {
         const prevTier = p.chargeTier;
-        p.chargeTier = Math.min(COMBAT.MAX_CHARGE_TIER, p.chargeTier + 1);
+        const chargeStep = p.perks.quick_charge > 0 && p.chargeTier === 1 ? 2 : 1;
+        p.chargeTier = Math.min(COMBAT.MAX_CHARGE_TIER, p.chargeTier + chargeStep);
         this.audio.playBounce(p.chargeTier, false);
         const tierColors = [COLORS.charge0, COLORS.charge1, COLORS.charge2, COLORS.charge3];
         const col = tierColors[p.chargeTier] ?? COLORS.charge3;
@@ -1094,7 +1136,8 @@ export class GameEngine {
         this.addShake(-wallHit.normalX, -wallHit.normalY, 4);
         this.addFloatingText(e.x, e.y - 12, 'WALL SLAM!', COLORS.textGold, 0.95);
         this.spawnSparks(e.x, e.y, wallHit.normalX, wallHit.normalY, COLORS.textGold, 10, 50, 140);
-        this.damageEnemy(e, COMBAT.WALL_SLAM_BONUS_DAMAGE, 0, 0, e.x, e.y, true, true);
+        const slamDmg = COMBAT.WALL_SLAM_BONUS_DAMAGE + p.perks.heavy_ram;
+        this.damageEnemy(e, slamDmg, 0, 0, e.x, e.y, true, true);
 
         if (p.perks.explosive_slam > 0) {
           this.triggerExplosiveSlam(e.x, e.y, p.perks.explosive_slam);
@@ -1128,7 +1171,7 @@ export class GameEngine {
             this.clampToArena(p);
             this.clampToArena(e);
             const ramDmg = COMBAT.RAM_BASE_DAMAGE + (p.chargeTier >= 2 ? 1 : 0);
-            const knockSpeed = 290 + p.chargeTier * 35;
+            const knockSpeed = 290 + p.chargeTier * 35 + p.perks.heavy_ram * 45;
             e.slammedTimer = 0.8;
             this.audio.playRam(p.chargeTier >= 2);
             this.triggerHitstop(COMBAT.HITSTOP_LIGHT_SEC);
@@ -1244,7 +1287,8 @@ export class GameEngine {
           p.aimDirY = away.y;
           p.armored = true;
           const prev = p.chargeTier;
-          p.chargeTier = Math.min(COMBAT.MAX_CHARGE_TIER, p.chargeTier + 1);
+          const bumpCharge = 1 + p.perks.quick_charge;
+          p.chargeTier = Math.min(COMBAT.MAX_CHARGE_TIER, p.chargeTier + bumpCharge);
           h.pulseTimer = 0.28;
           this.audio.playBumper();
           this.addShake(away.x, away.y, 2.5);
@@ -1431,7 +1475,10 @@ export class GameEngine {
     this.audio.playKill(this.multiKillCount);
 
     if (isBankOrCharged || this.multiKillCount >= 2) {
-      this.flowMultiplier = Math.min(5.0, +(this.flowMultiplier + 0.5).toFixed(1));
+      this.flowMultiplier = Math.min(
+        this.getMaxFlowMultiplier(),
+        +(this.flowMultiplier + 0.5).toFixed(1),
+      );
       this.updateMusicIntensity();
     }
 
@@ -1547,7 +1594,11 @@ export class GameEngine {
 
     if (this.enemies.length === 0 && this.phase === 'playing') {
       if (!this.tookDamageThisRoom) {
-        this.flowMultiplier = Math.min(5.0, +(this.flowMultiplier + 0.5).toFixed(1));
+        const noHitGain = 0.5 + this.player.perks.flow_surge * 0.5;
+        this.flowMultiplier = Math.min(
+          this.getMaxFlowMultiplier(),
+          +(this.flowMultiplier + noHitGain).toFixed(1),
+        );
       }
       const clearBonus = Math.round(this.roomNumber * 100 * this.flowMultiplier);
       this.score += clearBonus;
@@ -1695,6 +1746,7 @@ export class GameEngine {
       score: this.score,
       flowMultiplier: this.flowMultiplier,
       roomTimer: this.roomTimer,
+      overheatDelaySec: this.getOverheatDelaySec(),
       shakeX: this.shakeX,
       shakeY: this.shakeY,
       transitionProgress: clamp(this.transitionTimer / TRANSITION.ROOM_SCROLL_SEC, 0, 1),

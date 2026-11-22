@@ -47,6 +47,7 @@ export interface RenderState {
   score: number;
   flowMultiplier: number;
   roomTimer: number;
+  overheatDelaySec?: number;
   shakeX: number;
   shakeY: number;
   transitionProgress: number;
@@ -707,9 +708,10 @@ export class GameRenderer {
     }
 
     // Faint red ambient floor tint during Overheat
+    const effectiveTimer = this.getEffectiveOverheatTimer(state);
     if (
       state.phase === 'playing' &&
-      state.roomTimer >= OVERHEAT.OVERHEAT_START_SEC
+      effectiveTimer >= OVERHEAT.OVERHEAT_START_SEC
     ) {
       const pulse = 0.06 + 0.05 * Math.sin(state.time * 10);
       ctx.fillStyle = `rgba(255, 43, 69, ${pulse.toFixed(3)})`;
@@ -719,17 +721,22 @@ export class GameRenderer {
     ctx.restore();
   }
 
+  private getEffectiveOverheatTimer(state: RenderState): number {
+    return state.roomTimer - (state.overheatDelaySec ?? 0);
+  }
+
   private drawDungeonWalls(
     ctx: CanvasRenderingContext2D,
     state: RenderState,
   ): void {
     const isPlaying = state.phase === 'playing';
+    const effectiveTimer = this.getEffectiveOverheatTimer(state);
     const isOverheat =
-      isPlaying && state.roomTimer >= OVERHEAT.OVERHEAT_START_SEC;
+      isPlaying && effectiveTimer >= OVERHEAT.OVERHEAT_START_SEC;
     const isWarn =
       isPlaying &&
       !isOverheat &&
-      state.roomTimer >= OVERHEAT.WARNING_START_SEC;
+      effectiveTimer >= OVERHEAT.WARNING_START_SEC;
 
     const pulseFast = Math.sin(state.time * 14) > 0;
     const pulseMed = Math.sin(state.time * 8) > 0;
@@ -794,7 +801,9 @@ export class GameRenderer {
   ): void {
     if (state.phase !== 'playing') return;
 
-    if (state.roomTimer >= OVERHEAT.OVERHEAT_START_SEC) {
+    const effectiveTimer = this.getEffectiveOverheatTimer(state);
+
+    if (effectiveTimer >= OVERHEAT.OVERHEAT_START_SEC) {
       if (Math.sin(state.time * 12) > -0.3) {
         this.drawPixelText(
           ctx,
@@ -806,10 +815,10 @@ export class GameRenderer {
           'center',
         );
       }
-    } else if (state.roomTimer >= OVERHEAT.WARNING_START_SEC) {
+    } else if (effectiveTimer >= OVERHEAT.WARNING_START_SEC) {
       const secs = Math.max(
         1,
-        Math.ceil(OVERHEAT.OVERHEAT_START_SEC - state.roomTimer),
+        Math.ceil(OVERHEAT.OVERHEAT_START_SEC - effectiveTimer),
       );
       const col =
         Math.sin(state.time * 10) > 0 ? COLORS.wallOverheatWarn : '#ffe08a';

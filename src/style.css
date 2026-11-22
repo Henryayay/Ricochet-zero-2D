@@ -317,6 +317,8 @@ body {
   letter-spacing: 0.1em;
   padding: 2px 5px;
   border: 1px solid currentColor;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .draft-badge.perk {
@@ -329,6 +331,33 @@ body {
 
 .draft-badge.weapon_mod {
   color: #d8ff36;
+}
+
+.draft-skip-btn {
+  width: 100%;
+  max-width: 340px;
+  background: rgba(16, 19, 34, 0.85);
+  border: 2px solid #2e3961;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  padding: 8px 12px;
+  cursor: pointer;
+  text-align: center;
+  box-shadow: 0 2px 0 #060811;
+}
+
+.draft-skip-btn:hover,
+.draft-skip-btn:focus-visible {
+  border-color: var(--neon-gold);
+  color: var(--neon-gold);
+  outline: none;
+}
+
+.draft-skip-btn:active {
+  transform: translateY(1px);
 }
 
 .draft-desc {

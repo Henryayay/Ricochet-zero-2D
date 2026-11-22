@@ -20,7 +20,15 @@ export type PerkId =
   | 'brake_shockwave'
   | 'longer_focus'
   | 'max_shield'
-  | 'bounce_speed';
+  | 'bounce_speed'
+  | 'air_drag_tune'
+  | 'heavy_ram'
+  | 'quick_charge'
+  | 'overheat_vent'
+  | 'momentum_edge'
+  | 'flow_surge'
+  | 'vital_core'
+  | 'field_repair';
 
 export type EnemyKind = 'slime' | 'spike_slime' | 'sniper' | 'bomb_bot' | 'drone' | 'boss';
 
@@ -210,6 +218,14 @@ export function createInitialPerks(): Record<PerkId, number> {
     longer_focus: 0,
     max_shield: 0,
     bounce_speed: 0,
+    air_drag_tune: 0,
+    heavy_ram: 0,
+    quick_charge: 0,
+    overheat_vent: 0,
+    momentum_edge: 0,
+    flow_surge: 0,
+    vital_core: 0,
+    field_repair: 0,
   };
 }
 

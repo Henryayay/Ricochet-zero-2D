@@ -44,7 +44,10 @@ export const COMBAT = {
   MAX_CHARGE_TIER: 3,
   MAX_WEAPON_UPGRADES: 2,
   MAX_WEAPON_MOD_RANK: 1,
+  HARD_MAX_HP: 4,
   HARD_MAX_SHIELD: 3,
+  MOMENTUM_EDGE_MIN_SPEED: 290,
+  SKIP_DRAFT_BASE_BONUS: 150,
   BOSS_SHIELD_HALF_ANGLE_RAD: (48 * Math.PI) / 180,
   RAM_BASE_DAMAGE: 1,
   WALL_SLAM_BONUS_DAMAGE: 2,
@@ -63,6 +66,14 @@ export const PERK_MAX_RANKS = {
   longer_focus: 2,
   max_shield: 2,
   bounce_speed: 2,
+  air_drag_tune: 2,
+  heavy_ram: 2,
+  quick_charge: 1,
+  overheat_vent: 2,
+  momentum_edge: 1,
+  flow_surge: 1,
+  vital_core: 1,
+  field_repair: 99,
 } as const;
 
 export const OVERHEAT = {

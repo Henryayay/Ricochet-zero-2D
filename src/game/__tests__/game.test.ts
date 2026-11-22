@@ -10,7 +10,7 @@ import {
   PHYSICS,
   TRANSITION,
 } from '../constants.ts';
-import type { DraftOption, Enemy } from '../entities.ts';
+import type { DraftOption, Enemy, PerkId } from '../entities.ts';
 import { GameEngine } from '../engine.ts';
 import {
   isBossFrontShieldHit,
@@ -1694,6 +1694,494 @@ describe('Ricochet Zero Core Systems', () => {
       stepFor(0.34); // fires 2 aimed follow-up shots (total 12 bullets)
       expect(engine.projectiles.filter((pr) => !pr.fromPlayer)).toHaveLength(12);
       expect(boss.burstRemaining).toBe(0);
+    });
+  });
+
+  describe('12. Expanded Player-Property Perks & Draft Skip', () => {
+    it('air_drag_tune retains strictly higher speed after 1s of unblocked flight', () => {
+      const fly1Sec = (airDragRank: number): number => {
+        const engine = new GameEngine();
+        engine.startNewRun('railgun');
+        engine.enemies = [];
+        engine.hazards = [];
+        engine.player.perks.air_drag_tune = airDragRank;
+        engine.player.x = 135;
+        engine.player.y = 445;
+        engine.player.vx = 0;
+        engine.player.vy = -260;
+        engine.player.aimDirX = 0;
+        engine.player.aimDirY = -1;
+        engine.player.armored = true;
+
+        const steps1s = Math.round(1 / PHYSICS.FIXED_DT);
+        for (let i = 0; i < steps1s; i++) {
+          engine.stepSimulation(PHYSICS.FIXED_DT);
+        }
+        return len(engine.player.vx, engine.player.vy);
+      };
+
+      const baseSpeed = fly1Sec(0);
+      const tunedSpeed = fly1Sec(2);
+      expect(tunedSpeed).toBeGreaterThan(baseSpeed);
+    });
+
+    it('heavy_ram increases ram knockback speed and sets Wall Slam bonus damage to 4 at rank 2', () => {
+      const runRam = (heavyRamRank: number) => {
+        const engine = new GameEngine();
+        engine.startNewRun('railgun');
+        engine.hazards = [];
+        engine.player.perks.heavy_ram = heavyRamRank;
+
+        const slime: Enemy = {
+          id: 21001 + heavyRamRank,
+          kind: 'slime',
+          x: 135,
+          y: 250,
+          vx: 0,
+          vy: 0,
+          radius: 10,
+          hp: 20,
+          maxHp: 20,
+          hitFlash: 0,
+          slammedTimer: 0,
+          angle: 0,
+          stateTimer: 10,
+          canShoot: false,
+        };
+        engine.enemies = [slime];
+        engine.player.x = 135;
+        engine.player.y = 264;
+        engine.player.vx = 0;
+        engine.player.vy = -300;
+        engine.player.aimDirX = 0;
+        engine.player.aimDirY = -1;
+        engine.player.armored = true;
+
+        engine.stepSimulation(PHYSICS.FIXED_DT);
+        return len(slime.vx, slime.vy);
+      };
+
+      const baseKnockSpeed = runRam(0);
+      const heavyKnockSpeed = runRam(2);
+      expect(heavyKnockSpeed).toBeGreaterThan(baseKnockSpeed);
+
+      // Wall Slam deals COMBAT.WALL_SLAM_BONUS_DAMAGE + 2 = 4 bonus damage
+      const slamEngine = new GameEngine();
+      slamEngine.startNewRun('railgun');
+      slamEngine.hazards = [];
+      slamEngine.player.perks.heavy_ram = 2;
+      slamEngine.player.x = 50;
+      slamEngine.player.y = 400;
+
+      const slammedSlime: Enemy = {
+        id: 21010,
+        kind: 'slime',
+        x: ARENA.right - 10.5,
+        y: 200,
+        vx: 220,
+        vy: 0,
+        radius: 10,
+        hp: 10,
+        maxHp: 10,
+        hitFlash: 0,
+        slammedTimer: 0.5,
+        angle: 0,
+        stateTimer: 10,
+        canShoot: false,
+      };
+      slamEngine.enemies = [slammedSlime];
+
+      slamEngine.stepSimulation(PHYSICS.FIXED_DT);
+      slamEngine.stepSimulation(PHYSICS.FIXED_DT);
+
+      expect(COMBAT.WALL_SLAM_BONUS_DAMAGE + 2).toBe(4);
+      expect(slammedSlime.hp).toBe(6);
+      expect(slamEngine.floatingTexts.some((ft) => ft.text === 'WALL SLAM!')).toBe(true);
+    });
+
+    it('quick_charge jumps wall bounce 1 -> 3 (3x MAX!) and bumper +2 Charge (0 -> 2)', () => {
+      // Wall bounce at chargeTier === 1 jumps directly to chargeTier === 3
+      const wallEngine = new GameEngine();
+      wallEngine.startNewRun('railgun');
+      wallEngine.hazards = [];
+      wallEngine.enemies = [
+        {
+          id: 21020,
+          kind: 'slime',
+          x: 200,
+          y: 120,
+          vx: 0,
+          vy: 0,
+          radius: 10,
+          hp: 20,
+          maxHp: 20,
+          hitFlash: 0,
+          slammedTimer: 0,
+          angle: 0,
+          stateTimer: 10,
+          canShoot: false,
+        },
+      ];
+      wallEngine.player.perks.quick_charge = 1;
+      wallEngine.player.x = ARENA.right - wallEngine.player.radius - 1;
+      wallEngine.player.y = 300;
+      wallEngine.player.vx = 280;
+      wallEngine.player.vy = 0;
+      wallEngine.player.aimDirX = 1;
+      wallEngine.player.aimDirY = 0;
+      wallEngine.player.armored = true;
+      wallEngine.player.chargeTier = 1;
+
+      wallEngine.stepSimulation(PHYSICS.FIXED_DT);
+      expect(wallEngine.player.chargeTier).toBe(3);
+      expect(wallEngine.floatingTexts.some((ft) => ft.text === '3x MAX!')).toBe(true);
+
+      // Pinball Bumper hit at chargeTier === 0 grants +2 Charge (chargeTier === 2)
+      const bumperEngine = new GameEngine();
+      bumperEngine.startNewRun('railgun');
+      bumperEngine.enemies = [
+        {
+          id: 21021,
+          kind: 'slime',
+          x: 220,
+          y: 100,
+          vx: 0,
+          vy: 0,
+          radius: 10,
+          hp: 20,
+          maxHp: 20,
+          hitFlash: 0,
+          slammedTimer: 0,
+          angle: 0,
+          stateTimer: 10,
+          canShoot: false,
+        },
+      ];
+      bumperEngine.hazards = [
+        {
+          id: 21022,
+          kind: 'bumper',
+          x: 135,
+          y: 250,
+          radius: 11,
+          hp: 999,
+          pulseTimer: 0,
+          triggered: false,
+        },
+      ];
+      bumperEngine.player.perks.quick_charge = 1;
+      bumperEngine.player.x = 135;
+      bumperEngine.player.y = 264;
+      bumperEngine.player.vx = 0;
+      bumperEngine.player.vy = -260;
+      bumperEngine.player.aimDirX = 0;
+      bumperEngine.player.aimDirY = -1;
+      bumperEngine.player.armored = true;
+      bumperEngine.player.chargeTier = 0;
+
+      bumperEngine.stepSimulation(PHYSICS.FIXED_DT);
+      expect(bumperEngine.player.chargeTier).toBe(2);
+    });
+
+    it('overheat_vent delays Overheat by +8s at rank 2', () => {
+      const engine = new GameEngine();
+      engine.startNewRun('railgun');
+      engine.hazards = [];
+      engine.enemies = [
+        {
+          id: 21030,
+          kind: 'slime',
+          x: 60,
+          y: 100,
+          vx: 0,
+          vy: 0,
+          radius: 10,
+          hp: 20,
+          maxHp: 20,
+          hitFlash: 0,
+          slammedTimer: 0,
+          angle: 0,
+          stateTimer: 10,
+          canShoot: false,
+        },
+      ];
+      engine.player.perks.overheat_vent = 2;
+      expect(engine.getRenderState().overheatDelaySec).toBe(8);
+      expect(OVERHEAT.OVERHEAT_START_SEC + 8).toBe(31);
+
+      // Bounce at roomTimer = 26s (< 31s): NO overheat damage, normal charge gain
+      engine.roomTimer = 26;
+      engine.player.shield = 1;
+      engine.player.hp = 3;
+      engine.player.x = ARENA.right - engine.player.radius - 1;
+      engine.player.y = 320;
+      engine.player.vx = 260;
+      engine.player.vy = 0;
+      engine.player.aimDirX = 1;
+      engine.player.aimDirY = 0;
+      engine.player.armored = true;
+      engine.player.chargeTier = 0;
+
+      engine.stepSimulation(PHYSICS.FIXED_DT);
+      expect(engine.player.shield).toBe(1);
+      expect(engine.player.hp).toBe(3);
+      expect(engine.player.chargeTier).toBe(1);
+
+      // Bounce at roomTimer = 31.5s (>= 31s): Overheat triggers normally
+      engine.roomTimer = 31.5;
+      engine.player.iframes = 0;
+      engine.player.x = ARENA.right - engine.player.radius - 1;
+      engine.player.y = 320;
+      engine.player.vx = 260;
+      engine.player.vy = 0;
+      engine.player.aimDirX = 1;
+      engine.player.aimDirY = 0;
+      engine.player.armored = true;
+
+      engine.stepSimulation(PHYSICS.FIXED_DT);
+      expect(engine.player.shield).toBe(0);
+    });
+
+    it('momentum_edge deals +1 bonus damage and shows FAST SHOT! only at speed >= 290', () => {
+      expect(COMBAT.MOMENTUM_EDGE_MIN_SPEED).toBe(290);
+
+      const engine = new GameEngine();
+      engine.startNewRun('railgun');
+      engine.hazards = [];
+      const target: Enemy = {
+        id: 21040,
+        kind: 'slime',
+        x: 135,
+        y: 180,
+        vx: 0,
+        vy: 0,
+        radius: 10,
+        hp: 10,
+        maxHp: 10,
+        hitFlash: 0,
+        slammedTimer: 0,
+        angle: 0,
+        stateTimer: 10,
+        canShoot: false,
+      };
+      engine.enemies = [target];
+      engine.player.perks.momentum_edge = 1;
+
+      // Speed 320 (>= 290): Railgun Tier 0 deals 2 + 1 = 3 damage and shows 'FAST SHOT!'
+      engine.player.x = 135;
+      engine.player.y = 300;
+      engine.player.vx = 0;
+      engine.player.vy = -320;
+      engine.player.aimDirX = 0;
+      engine.player.aimDirY = -1;
+      engine.player.armored = true;
+      engine.player.chargeTier = 0;
+
+      triggerQuickTap(engine, 135, 300, 1, 1000, 50);
+      expect(target.hp).toBe(7);
+      expect(engine.floatingTexts.some((ft) => ft.text === 'FAST SHOT!')).toBe(true);
+
+      // Speed 200 (< 290): Railgun Tier 0 deals base damage 2 and no 'FAST SHOT!'
+      engine.floatingTexts = [];
+      engine.player.x = 135;
+      engine.player.y = 300;
+      engine.player.vx = 0;
+      engine.player.vy = -200;
+      engine.player.aimDirX = 0;
+      engine.player.aimDirY = -1;
+      engine.player.armored = true;
+      engine.player.chargeTier = 0;
+
+      triggerQuickTap(engine, 135, 300, 2, 1200, 50);
+      expect(target.hp).toBe(5);
+      expect(engine.floatingTexts.some((ft) => ft.text === 'FAST SHOT!')).toBe(false);
+    });
+
+    it('flow_surge grants +1.0 Flow on no-hit clear and raises Flow cap to 7.0', () => {
+      const engine = new GameEngine();
+      engine.startNewRun('railgun');
+      engine.player.perks.flow_surge = 1;
+      engine.flowMultiplier = 1.0;
+      engine.tookDamageThisRoom = false;
+
+      // Clearing a room without damage grants +1.0 Flow (1.0 -> 2.0)
+      for (const e of engine.enemies) {
+        e.hp = 0;
+      }
+      engine.stepSimulation(PHYSICS.FIXED_DT);
+      expect(engine.phase).toBe('transition');
+      expect(engine.flowMultiplier).toBe(2.0);
+
+      // Flow scales up to 7.0 instead of capping at 5.0
+      engine.phase = 'playing';
+      engine.enemies = [
+        {
+          id: 21050,
+          kind: 'slime',
+          x: 135,
+          y: 180,
+          vx: 0,
+          vy: 0,
+          radius: 10,
+          hp: 0,
+          maxHp: 3,
+          hitFlash: 0,
+          slammedTimer: 0,
+          angle: 0,
+          stateTimer: 10,
+        },
+      ];
+      engine.flowMultiplier = 6.5;
+      engine.tookDamageThisRoom = false;
+      engine.stepSimulation(PHYSICS.FIXED_DT);
+      expect(engine.flowMultiplier).toBe(7.0);
+
+      // Capped at 7.0
+      engine.phase = 'playing';
+      engine.enemies = [];
+      engine.tookDamageThisRoom = false;
+      engine.stepSimulation(PHYSICS.FIXED_DT);
+      expect(engine.flowMultiplier).toBe(7.0);
+    });
+
+    it('vital_core caps at HARD_MAX_HP = 4 and field_repair heals only when damaged', () => {
+      expect(COMBAT.HARD_MAX_HP).toBe(4);
+      expect(PERK_MAX_RANKS.vital_core).toBe(1);
+
+      const engine = new GameEngine();
+      engine.startNewRun('railgun');
+      expect(engine.player.maxHp).toBe(3);
+      expect(engine.player.hp).toBe(3);
+
+      // At full HP (3/3), field_repair is excluded from draft options
+      for (let i = 0; i < 30; i++) {
+        const opts = generateDraftOptions(engine.player, 2);
+        expect(opts.some((opt) => opt.perkId === 'field_repair')).toBe(false);
+      }
+
+      // vital_core increases maxHp 3 -> 4 and heals +1 (2 -> 3 when damaged, or 3 -> 4 at full)
+      engine.player.hp = 2;
+      engine.phase = 'draft';
+      engine.selectDraftOption({
+        id: 'perk_vital_core',
+        kind: 'perk',
+        perkId: 'vital_core',
+        title: 'Reinforced Core',
+        description: '+1 Max HP (up to 4) and restores +1 HP.',
+      });
+      expect(engine.player.maxHp).toBe(4);
+      expect(engine.player.hp).toBe(3);
+      expect(engine.player.perks.vital_core).toBe(1);
+
+      // Subsequent vital_core stays capped at HARD_MAX_HP = 4 and is excluded from generateDraftOptions
+      engine.phase = 'draft';
+      engine.selectDraftOption({
+        id: 'perk_vital_core',
+        kind: 'perk',
+        perkId: 'vital_core',
+        title: 'Reinforced Core',
+        description: '+1 Max HP (up to 4) and restores +1 HP.',
+      });
+      expect(engine.player.maxHp).toBe(4);
+      expect(engine.player.hp).toBe(4);
+
+      for (let i = 0; i < 30; i++) {
+        const opts = generateDraftOptions(engine.player, 3);
+        expect(opts.some((opt) => opt.perkId === 'vital_core')).toBe(false);
+      }
+
+      // When hp < maxHp, field_repair is eligible and heals +1 HP
+      engine.player.hp = 2;
+      engine.player.weaponUpgradeBudget = COMBAT.MAX_WEAPON_UPGRADES;
+      let sawFieldRepair = false;
+      for (let i = 0; i < 40; i++) {
+        const opts = generateDraftOptions(engine.player, 3);
+        if (opts.some((opt) => opt.perkId === 'field_repair')) {
+          sawFieldRepair = true;
+          break;
+        }
+      }
+      expect(sawFieldRepair).toBe(true);
+
+      engine.phase = 'draft';
+      engine.selectDraftOption({
+        id: 'perk_field_repair',
+        kind: 'perk',
+        perkId: 'field_repair',
+        title: 'Nano Patch',
+        description: 'Restores +1 HP immediately.',
+      });
+      expect(engine.player.hp).toBe(3);
+    });
+
+    it('skipDraft awards scaled score bonus, blocks during weapon transfers, and draft offers varied perks/swaps', () => {
+      // skipDraft() in 'draft' phase awards Math.round(COMBAT.SKIP_DRAFT_BASE_BONUS * flowMultiplier)
+      const engine = new GameEngine();
+      engine.startNewRun('railgun');
+      engine.flowMultiplier = 2.5;
+      advanceRoomClearToDraft(engine);
+
+      const scoreBeforeSkip = engine.score;
+      const expectedBonus = Math.round(COMBAT.SKIP_DRAFT_BASE_BONUS * engine.flowMultiplier);
+      engine.skipDraft();
+
+      expect(engine.phase).toBe('playing');
+      expect(engine.roomNumber).toBe(2);
+      expect(engine.score).toBe(scoreBeforeSkip + expectedBonus);
+
+      // skipDraft() during pendingWeaponTransfers > 0 does nothing
+      const transferEngine = new GameEngine();
+      transferEngine.startNewRun('railgun');
+      transferEngine.player.weaponUpgradeBudget = 2;
+      transferEngine.player.weaponMods.rail_beams = 1;
+      transferEngine.player.weaponMods.rail_width = 1;
+      advanceRoomClearToDraft(transferEngine);
+
+      transferEngine.selectDraftOption({
+        id: 'weapon_shotgun',
+        kind: 'weapon',
+        weaponId: 'shotgun',
+        title: 'Equip: Recoil Shotgun',
+        description: 'Wide pellet blast forward; kicks you sharply backward.',
+      });
+      expect(transferEngine.phase).toBe('draft');
+      const scoreDuringTransfer = transferEngine.score;
+      const roomDuringTransfer = transferEngine.roomNumber;
+
+      transferEngine.skipDraft();
+      expect(transferEngine.phase).toBe('draft');
+      expect(transferEngine.score).toBe(scoreDuringTransfer);
+      expect(transferEngine.roomNumber).toBe(roomDuringTransfer);
+
+      // Across 40 calls to generateDraftOptions (weaponUpgradeBudget = 2, fresh perks),
+      // weapon swaps appear occasionally (0 < count < 40) and multiple player-property perks appear
+      const varietyEngine = new GameEngine();
+      varietyEngine.startNewRun('railgun');
+      varietyEngine.player.weaponUpgradeBudget = 2;
+
+      let weaponSwapDraftCount = 0;
+      const seenPerks = new Set<PerkId>();
+      let draftsWithMultiplePerks = 0;
+
+      for (let i = 0; i < 40; i++) {
+        const opts = generateDraftOptions(varietyEngine.player, 3);
+        expect(opts).toHaveLength(3);
+        if (opts.some((opt) => opt.kind === 'weapon')) {
+          weaponSwapDraftCount++;
+        }
+        const perkOpts = opts.filter((opt) => opt.kind === 'perk' && opt.perkId);
+        if (perkOpts.length >= 2) {
+          draftsWithMultiplePerks++;
+        }
+        for (const opt of perkOpts) {
+          if (opt.perkId) seenPerks.add(opt.perkId);
+        }
+      }
+
+      expect(weaponSwapDraftCount).toBeGreaterThan(0);
+      expect(weaponSwapDraftCount).toBeLessThan(40);
+      expect(draftsWithMultiplePerks).toBe(40);
+      expect(seenPerks.size).toBeGreaterThanOrEqual(8);
     });
   });
 });
