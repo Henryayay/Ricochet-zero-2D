@@ -611,10 +611,9 @@ export class GameRenderer {
     // 17. Overheat countdown / warning banner inside arena
     this.drawOverheatOverlay(ctx, state);
 
-    // 18. Tutorial diegetic cues & compact top banner
+    // 18. Tutorial diegetic cues (HTML coach strip & briefing rendered in #ui-layer)
     if (state.phase === 'playing' && state.tutorial?.active) {
-      this.drawTutorialCues(ctx, state.tutorial, state.time);
-      this.drawTutorialBanner(ctx, state.tutorial, state.time);
+      this.drawTutorialCues(ctx, state, state.tutorial, state.time);
     }
 
     ctx.restore(); // End arena clip
@@ -2042,17 +2041,53 @@ export class GameRenderer {
 
   private drawTutorialCues(
     ctx: CanvasRenderingContext2D,
+    state: RenderState,
     tut: TutorialRenderInfo,
     time: number,
   ): void {
+    // Shield barrier around Drill 3 Drone until player completes 0.2x slow-mo dodge
+    if (tut.droneBarrierActive && state.enemies.length > 0) {
+      const drone = state.enemies[0];
+      const pulse = 0.5 + 0.5 * Math.sin(time * 9);
+      const barrierR = drone.radius + 7;
+      ctx.save();
+      ctx.globalAlpha = 0.65 + 0.3 * pulse;
+      this.drawPixelCircleStroke(ctx, drone.x, drone.y, barrierR, COLORS.textCyan, 1);
+      ctx.globalAlpha = 0.25 + 0.15 * pulse;
+      this.drawPixelCircleStroke(ctx, drone.x, drone.y, barrierR - 2, '#e8feff', 1);
+      // 4 rotating shield nodes
+      ctx.globalAlpha = 0.95;
+      for (let i = 0; i < 4; i++) {
+        const ang = time * 2.4 + (i * Math.PI) / 2;
+        const nx = Math.round(drone.x + Math.cos(ang) * barrierR);
+        const ny = Math.round(drone.y + Math.sin(ang) * barrierR);
+        ctx.fillStyle = '#e8feff';
+        ctx.fillRect(nx - 1, ny - 1, 2, 2);
+      }
+      ctx.restore();
+    }
+
     // Pulsing target highlight ring
-    if (tut.highlightPos) {
+    if (tut.highlightPos && !tut.droneBarrierActive) {
       const pulse = 0.5 + 0.5 * Math.sin(time * 7);
       const r = 14 + Math.round(pulse * 4);
       ctx.save();
       ctx.globalAlpha = 0.45 + 0.35 * pulse;
       this.drawPixelCircleStroke(ctx, tut.highlightPos.x, tut.highlightPos.y, r, COLORS.textCyan, 1);
       ctx.restore();
+    }
+
+    // World-space cue near the player so eyes at bottom don't miss it
+    if (tut.worldHintText) {
+      const hintY = clamp(state.player.y - 22, ARENA.top + 48, ARENA.bottom - 28);
+      const col = tut.showTapHint
+        ? COLORS.textGold
+        : tut.stageIndex === 2
+          ? COLORS.textRed
+          : COLORS.textCyan;
+      if (Math.sin(time * 9) > -0.65) {
+        this.drawPixelText(ctx, tut.worldHintText, state.player.x, hintY, col, 1, 'center');
+      }
     }
 
     // Animated drag gesture ghost (simple finger pulling slingshot)
@@ -2109,40 +2144,6 @@ export class GameRenderer {
       this.drawPixelText(ctx, 'TAP TO FIRE!', tapX, tapY + 11, COLORS.textGold, 1, 'center');
       ctx.restore();
     }
-  }
-
-  private drawTutorialBanner(
-    ctx: CanvasRenderingContext2D,
-    tut: TutorialRenderInfo,
-    time: number,
-  ): void {
-    const bx = 14;
-    const by = 43;
-    const bw = CANVAS_WIDTH - 28;
-    const bh = 27;
-
-    ctx.fillStyle = 'rgba(9, 12, 24, 0.88)';
-    ctx.fillRect(bx, by, bw, bh);
-
-    const borderCol =
-      tut.showTapHint && Math.sin(time * 12) > 0
-        ? COLORS.textGold
-        : tut.stageIndex === 2
-          ? COLORS.textRed
-          : COLORS.textCyan;
-    ctx.fillStyle = borderCol;
-    ctx.fillRect(bx, by, bw, 1);
-    ctx.fillRect(bx, by + bh - 1, bw, 1);
-    ctx.fillRect(bx, by, 1, bh);
-    ctx.fillRect(bx + bw - 1, by, 1, bh);
-
-    const line1Col = tut.showTapHint
-      ? COLORS.textGold
-      : tut.stageIndex === 2
-        ? COLORS.textRed
-        : COLORS.textCyan;
-    this.drawPixelText(ctx, tut.promptLine1, CANVAS_WIDTH / 2, by + 5, line1Col, 1, 'center');
-    this.drawPixelText(ctx, tut.promptLine2, CANVAS_WIDTH / 2, by + 15, COLORS.textWhite, 1, 'center');
   }
 
   private drawTopHud(ctx: CanvasRenderingContext2D, state: RenderState): void {

@@ -2225,17 +2225,54 @@ describe('Ricochet Zero Core Systems', () => {
       expect(engine.enemies).toHaveLength(2);
     });
 
-    it('enforces skill gates across all 3 drills and launches Room 1 with selected starter weapon', () => {
-      const engine = new GameEngine();
+    it('enforces strict skill gates across all 3 drills, pauses for briefing, and drops Drill 3 barrier after 0.2x slow-mo dodge', () => {
+      const tutorialEvents: Array<boolean | null> = [];
+      const engine = new GameEngine({
+        onTutorialStateChange: (info) => {
+          tutorialEvents.push(info ? info.briefVisible : null);
+        },
+      });
       engine.startTutorial({ returnToTitle: false, postWeapon: 'shotgun' });
 
-      // Drill 1: Clearing without ramming resets Drill 1
-      for (const e of engine.enemies) e.hp = 0;
+      // Briefing starts visible and pauses simulation until first pointer interaction
+      expect(engine.getRenderState().tutorial?.briefVisible).toBe(true);
+      engine.update(0.05);
+      expect(engine.roomTimer).toBe(0);
+
+      // Pointer down dismisses briefing
+      engine.handlePointerDown(135, 400, 1, 1000);
+      engine.handlePointerUp(135, 400, 1, 1050);
+      expect(engine.getRenderState().tutorial?.briefVisible).toBe(false);
+      expect(tutorialEvents).toContain(true);
+      expect(tutorialEvents).toContain(false);
+
+      // Drill 1: Weapon firing is blocked (cannot skip ramming by shooting)
+      engine.player.armored = true;
+      engine.player.vx = 0;
+      engine.player.vy = -250;
+      engine.player.x = engine.enemies[0].x;
+      engine.player.y = 320;
+      triggerQuickTap(engine, 135, 380);
+      expect(engine.enemies).toHaveLength(2);
+      expect(engine.enemies[0].hp).toBe(1);
+
+      // Drill 1: Ramming only 1 slime + clearing 2nd non-ram resets Drill 1
+      engine.player.armored = true;
+      engine.player.vx = 280;
+      engine.player.vy = 0;
+      engine.player.x = engine.enemies[0].x;
+      engine.player.y = engine.enemies[0].y;
+      engine.stepSimulation(PHYSICS.FIXED_DT);
+      expect(engine.getRenderState().tutorial?.stepBadge).toBe('1/2 RAMS');
+      expect(engine.enemies).toHaveLength(1);
+      engine.enemies[0].hp = 0;
       engine.stepSimulation(PHYSICS.FIXED_DT);
       expect(engine.getTutorialStageIndex()).toBe(0);
       expect(engine.enemies).toHaveLength(2);
 
-      // Drill 1: Armored ramming advances to Drill 2
+      // Drill 1: Ramming both slimes advances to Drill 2
+      engine.handlePointerDown(135, 400, 1, 1200);
+      engine.handlePointerUp(135, 400, 1, 1220);
       engine.player.armored = true;
       engine.player.vx = 280;
       engine.player.vy = 0;
@@ -2246,12 +2283,27 @@ describe('Ricochet Zero Core Systems', () => {
       }
       expect(engine.getTutorialStageIndex()).toBe(1);
       expect(engine.enemies).toHaveLength(1);
+      expect(engine.getRenderState().tutorial?.briefVisible).toBe(true);
 
-      // Drill 2: Killing slime without charged Brake-Tap resets Drill 2
-      engine.enemies[0].hp = 0;
+      // Drill 2: Direct ram deflects (deals 0 damage) and uncharged shot is blocked
+      engine.handlePointerDown(135, 400, 1, 1300);
+      engine.handlePointerUp(135, 400, 1, 1320);
+      engine.player.armored = true;
+      engine.player.vx = 0;
+      engine.player.vy = -260;
+      engine.player.x = engine.enemies[0].x;
+      engine.player.y = engine.enemies[0].y + 4;
       engine.stepSimulation(PHYSICS.FIXED_DT);
-      expect(engine.getTutorialStageIndex()).toBe(1);
-      expect(engine.enemies).toHaveLength(1);
+      expect(engine.enemies[0].hp).toBe(4);
+
+      engine.player.chargeTier = 0;
+      engine.player.armored = true;
+      engine.player.aimDirX = 0;
+      engine.player.aimDirY = -1;
+      engine.player.x = engine.enemies[0].x;
+      engine.player.y = 300;
+      triggerQuickTap(engine, 135, 380);
+      expect(engine.enemies[0].hp).toBe(4);
 
       // Drill 2: Bounce wall to reach chargeTier >= 1, then quick-tap to brake & fire Railgun
       engine.player.x = ARENA.right - engine.player.radius - 1;
@@ -2259,7 +2311,7 @@ describe('Ricochet Zero Core Systems', () => {
       engine.player.vx = 300;
       engine.player.vy = 0;
       engine.player.armored = true;
-      engine.stepSimulation(PHYSICS.FIXED_DT); // hits right wall -> chargeTier = 1, aims left toward slime
+      engine.stepSimulation(PHYSICS.FIXED_DT);
       expect(engine.player.chargeTier).toBeGreaterThanOrEqual(1);
 
       triggerQuickTap(engine, 135, 380);
@@ -2267,19 +2319,58 @@ describe('Ricochet Zero Core Systems', () => {
       expect(engine.getTutorialStageIndex()).toBe(2);
       expect(engine.enemies).toHaveLength(1);
       expect(engine.enemies[0].kind).toBe('drone');
+      expect(engine.getRenderState().tutorial?.droneBarrierActive).toBe(true);
 
-      // Drill 3: Killing drone without 0.2x slow-mo resets Drill 3
-      engine.enemies[0].hp = 0;
-      engine.stepSimulation(PHYSICS.FIXED_DT);
-      expect(engine.getTutorialStageIndex()).toBe(2);
-      expect(engine.enemies).toHaveLength(1);
-
-      // Drill 3: Trigger 0.2x slow-mo drag, then defeat drone -> completes tutorial & launches Room 1 with Shotgun
-      engine.handlePointerDown(135, 400, 1, 1000);
+      // Drill 3: Dismiss briefing, verify pre-bullet drag & early attack cannot bypass barrier
+      engine.handlePointerDown(135, 400, 1, 1500);
       engine.handlePointerMove(135, 430, 1);
+      engine.handlePointerUp(135, 430, 1, 1600);
+      // Player sits safely at side while Drone fires first wave
+      engine.player.x = 25;
+      engine.player.y = 395;
+      engine.player.vx = 0;
+      engine.player.vy = 0;
+
+      // Step until Drone fires its aimed red wave
+      for (let i = 0; i < 20; i++) {
+        engine.stepSimulation(PHYSICS.FIXED_DT);
+      }
+      expect(engine.projectiles.some((p) => !p.fromPlayer)).toBe(true);
+
+      // Attacking Drone while barrier is up deals 0 damage
+      engine.player.armored = true;
+      engine.player.vx = 0;
+      engine.player.vy = -280;
+      engine.player.x = engine.enemies[0].x;
+      engine.player.y = engine.enemies[0].y + 4;
+      engine.stepSimulation(PHYSICS.FIXED_DT);
+      expect(engine.enemies[0].hp).toBe(2);
+      expect(engine.getRenderState().tutorial?.droneBarrierActive).toBe(true);
+
+      // Now trigger 0.2x slow-mo WHILE red bullets are airborne and launch cleanly away
+      engine.player.x = 24;
+      engine.player.y = 395;
+      engine.player.vx = 0;
+      engine.player.vy = 0;
+      engine.handlePointerDown(24, 395, 1, 2000);
+      engine.handlePointerMove(24, 430, 1);
       expect(engine.getRenderState().aim.slowMoActive).toBe(true);
-      engine.handlePointerUp(135, 430, 1, 1200);
-      engine.enemies[0].hp = 0;
+      engine.handlePointerUp(24, 430, 1, 2120);
+
+      // Clear remaining wave bullets cleanly (simulating wave passing without hitting player)
+      engine.projectiles = [];
+      engine.stepSimulation(PHYSICS.FIXED_DT);
+      expect(engine.getRenderState().tutorial?.droneBarrierActive).toBe(false);
+
+      // Now finish off the unshielded Drone -> completes tutorial & launches Room 1 with Shotgun
+      engine.player.armored = true;
+      engine.player.vx = 0;
+      engine.player.vy = -300;
+      engine.player.x = engine.enemies[0].x;
+      engine.player.y = engine.enemies[0].y;
+      engine.stepSimulation(PHYSICS.FIXED_DT);
+      engine.player.x = engine.enemies[0].x;
+      engine.player.y = engine.enemies[0].y;
       engine.stepSimulation(PHYSICS.FIXED_DT);
 
       expect(engine.isTutorialActive()).toBe(false);
@@ -2287,6 +2378,121 @@ describe('Ricochet Zero Core Systems', () => {
       expect(engine.phase).toBe('playing');
       expect(engine.roomNumber).toBe(1);
       expect(engine.player.weapon).toBe('shotgun');
+    });
+
+    it('getting hit by multi-bullet wave in Drill 3 does not freeze loop and resets cleanly to start of Drill 3', () => {
+      const engine = new GameEngine();
+      engine.startTutorial({ returnToTitle: false, postWeapon: 'railgun' });
+
+      // Advance cleanly through Drill 1 and Drill 2 to enter Drill 3
+      engine.handlePointerDown(135, 400, 1, 100);
+      engine.handlePointerUp(135, 400, 1, 120);
+      engine.player.armored = true;
+      engine.player.vx = 280;
+      for (const e of engine.enemies) {
+        engine.player.x = e.x;
+        engine.player.y = e.y;
+        engine.stepSimulation(PHYSICS.FIXED_DT);
+      }
+      engine.handlePointerDown(135, 400, 1, 200);
+      engine.handlePointerUp(135, 400, 1, 220);
+      engine.player.x = ARENA.right - engine.player.radius - 1;
+      engine.player.y = engine.enemies[0].y;
+      engine.player.vx = 300;
+      engine.player.vy = 0;
+      engine.player.armored = true;
+      engine.stepSimulation(PHYSICS.FIXED_DT);
+      triggerQuickTap(engine, 135, 380);
+      engine.stepSimulation(PHYSICS.FIXED_DT);
+      expect(engine.getTutorialStageIndex()).toBe(2);
+
+      // Dismiss Drill 3 briefing and let Drone fire a 6-bullet wave
+      engine.handlePointerDown(135, 400, 1, 300);
+      engine.handlePointerUp(135, 400, 1, 320);
+      for (let i = 0; i < 20; i++) {
+        engine.update(1 / 60);
+      }
+      expect(engine.projectiles.length).toBeGreaterThanOrEqual(5);
+
+      // Collide player with a bullet near the end of projectiles[] (so earlier indices remain)
+      const hitBullet = engine.projectiles[engine.projectiles.length - 1];
+      engine.player.x = hitBullet.x;
+      engine.player.y = hitBullet.y;
+      engine.player.armored = true;
+
+      // Must NOT throw TypeError on remaining projectiles and must reset to start of Drill 3
+      expect(() => {
+        for (let i = 0; i < 10; i++) {
+          engine.update(1 / 60);
+        }
+      }).not.toThrow();
+
+      expect(engine.phase).toBe('playing');
+      expect(engine.getTutorialStageIndex()).toBe(2);
+      expect(engine.getRenderState().tutorial?.briefVisible).toBe(false);
+      expect(engine.getRenderState().tutorial?.droneBarrierActive).toBe(true);
+      expect(engine.player.x).toBe(135);
+      expect(engine.player.y).toBe(395);
+      expect(engine.player.hp).toBe(engine.player.maxHp);
+      expect(engine.player.shield).toBe(engine.player.maxShield);
+
+      // Player remains responsive and can drag-launch again
+      engine.handlePointerDown(135, 400, 2, 1000);
+      engine.handlePointerMove(135, 440, 2);
+      expect(engine.getRenderState().aim.slowMoActive).toBe(true);
+      engine.handlePointerUp(135, 440, 2, 1200);
+      expect(engine.player.vy).toBeLessThan(0);
+    });
+
+    it('drops Drill 3 barrier automatically after real simulated wave passes with 0.2x slow-mo dodge (no manual projectile clear)', () => {
+      const engine = new GameEngine();
+      engine.startTutorial({ returnToTitle: false, postWeapon: 'railgun' });
+
+      // Skip cleanly to Drill 3 via Drill 1 & 2 mechanics
+      engine.handlePointerDown(135, 400, 1, 100);
+      engine.handlePointerUp(135, 400, 1, 120);
+      engine.player.armored = true;
+      engine.player.vx = 280;
+      for (const e of engine.enemies) {
+        engine.player.x = e.x;
+        engine.player.y = e.y;
+        engine.stepSimulation(PHYSICS.FIXED_DT);
+      }
+      engine.handlePointerDown(135, 400, 1, 200);
+      engine.handlePointerUp(135, 400, 1, 220);
+      engine.player.x = ARENA.right - engine.player.radius - 1;
+      engine.player.y = engine.enemies[0].y;
+      engine.player.vx = 300;
+      engine.player.vy = 0;
+      engine.player.armored = true;
+      engine.stepSimulation(PHYSICS.FIXED_DT);
+      triggerQuickTap(engine, 135, 380);
+      engine.stepSimulation(PHYSICS.FIXED_DT);
+      expect(engine.getTutorialStageIndex()).toBe(2);
+
+      // Dismiss briefing and step real frames until Drone fires Wave 1
+      engine.handlePointerDown(135, 400, 1, 300);
+      engine.handlePointerUp(135, 400, 1, 320);
+      for (let i = 0; i < 25; i++) {
+        engine.update(1 / 60);
+      }
+      expect(engine.projectiles.some((p) => !p.fromPlayer)).toBe(true);
+      expect(engine.getRenderState().tutorial?.droneBarrierActive).toBe(true);
+
+      // Trigger 0.2x slow-mo while Wave 1 is airborne, then launch cleanly sideways into gap
+      engine.handlePointerDown(135, 400, 2, 1000);
+      engine.handlePointerMove(195, 410, 2); // aims left (-60, -10) safely away from center stream
+      expect(engine.getRenderState().aim.slowMoActive).toBe(true);
+      engine.handlePointerUp(195, 410, 2, 1180);
+
+      // Step real 60fps simulation until wave clears/passes without touching projectiles manually
+      for (let i = 0; i < 240; i++) {
+        engine.update(1 / 60);
+        if (!engine.getRenderState().tutorial?.droneBarrierActive) break;
+      }
+
+      expect(engine.getTutorialStageIndex()).toBe(2);
+      expect(engine.getRenderState().tutorial?.droneBarrierActive).toBe(false);
     });
 
     it('skipTutorial exits cleanly to Title when launched from Title and to Room 1 when launched via Drop In', () => {

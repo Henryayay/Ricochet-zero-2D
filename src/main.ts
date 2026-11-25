@@ -3,6 +3,7 @@ import { registerSW } from 'virtual:pwa-register';
 import { CANVAS_HEIGHT, CANVAS_WIDTH, COMBAT } from './game/constants.ts';
 import { DraftOption, WeaponId } from './game/entities.ts';
 import { GameEngine, GamePhase, RunSummary } from './game/engine.ts';
+import { TutorialRenderInfo } from './game/tutorial.ts';
 import { WEAPON_META } from './game/weapons.ts';
 
 registerSW({
@@ -21,6 +22,7 @@ let latestDraft: DraftOption[] = [];
 let latestDraftRoom = 1;
 let latestTransferRemaining = 0;
 let latestTransferWeapon: WeaponId | null = null;
+let latestTutorial: TutorialRenderInfo | null = null;
 let latestSummary: RunSummary = {
   score: 0,
   bestScore: 0,
@@ -49,6 +51,10 @@ const engine = new GameEngine({
     if (muteBtn) {
       muteBtn.textContent = muted ? 'SND: OFF' : 'SND: ON';
     }
+  },
+  onTutorialStateChange(info) {
+    latestTutorial = info;
+    updateTutorialOverlayDOM();
   },
 });
 
@@ -239,6 +245,46 @@ function renderGameOverOverlay(): string {
   `;
 }
 
+function renderTutorialOverlayInner(phase: GamePhase): string {
+  if (phase !== 'playing' || !latestTutorial?.active) return '';
+  const tut = latestTutorial;
+  const accent = tut.briefTagKind;
+
+  const briefCard = tut.briefVisible
+    ? `
+      <div class="tutorial-brief-backdrop">
+        <div class="tutorial-brief-card ${accent}">
+          <div class="tutorial-brief-top">
+            <span class="guide-tag tag-${accent}">${tut.briefTag}</span>
+            <span class="tutorial-brief-stage">DRILL ${tut.stageIndex + 1}/${tut.stageCount}</span>
+          </div>
+          <div class="tutorial-brief-headline">${tut.briefHeadline}</div>
+          <div class="tutorial-brief-sub">${tut.briefSubtext}</div>
+          <div class="tutorial-brief-cta">DRAG ANYWHERE TO START</div>
+        </div>
+      </div>
+    `
+    : '';
+
+  return `
+    <div class="tutorial-coach-bar ${accent}">
+      <div class="tutorial-coach-header">
+        <span class="tutorial-coach-title">${tut.promptLine1}</span>
+        <span class="tutorial-step-pill ${accent}">${tut.stepBadge}</span>
+      </div>
+      <div class="tutorial-coach-sub">${tut.promptLine2}</div>
+    </div>
+    ${briefCard}
+  `;
+}
+
+function updateTutorialOverlayDOM(): void {
+  const container = document.getElementById('tutorial-overlay');
+  if (container) {
+    container.innerHTML = renderTutorialOverlayInner(engine.phase);
+  }
+}
+
 function renderUI(phase: GamePhase): void {
   let overlay = '';
   if (phase === 'title') {
@@ -249,7 +295,7 @@ function renderUI(phase: GamePhase): void {
     overlay = renderGameOverOverlay();
   }
 
-  uiLayer.innerHTML = `${renderMuteBar()}${overlay}`;
+  uiLayer.innerHTML = `${renderMuteBar()}<div id="tutorial-overlay">${renderTutorialOverlayInner(phase)}</div>${overlay}`;
 
   const muteBtn = document.getElementById('btn-mute');
   muteBtn?.addEventListener('pointerdown', (e) => e.stopPropagation());

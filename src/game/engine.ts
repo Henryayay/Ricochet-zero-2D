@@ -51,6 +51,7 @@ import {
   buildTutorialRenderState,
   spawnTutorialStage,
   TUTORIAL_STAGE_COUNT,
+  TutorialRenderInfo,
 } from './tutorial.ts';
 import { fireActiveWeapon } from './weapons.ts';
 
@@ -74,6 +75,7 @@ export interface EngineCallbacks {
   ) => void;
   onGameOver?: (summary: RunSummary) => void;
   onMuteChange?: (muted: boolean) => void;
+  onTutorialStateChange?: (info: TutorialRenderInfo | null) => void;
 }
 
 export class GameEngine {
@@ -131,9 +133,17 @@ export class GameEngine {
   private tutorialStageIndex = 0;
   private tutorialReturnToTitle = false;
   private tutorialPostStartWeapon: WeaponId = 'railgun';
-  private tutorialUsedRam = false;
-  private tutorialFiredChargedBrake = false;
-  private tutorialUsedSlowMo = false;
+  private tutorialBriefVisible = false;
+  private tutorialRamKillCount = 0;
+  private tutorialKilledByChargedShot = false;
+  private tutorialDroneShielded = false;
+  private tutorialWaveActive = false;
+  private tutorialWaveIndex = 0;
+  private tutorialSlowMoDuringBullets = false;
+  private tutorialMovedDuringWave = false;
+  private tutorialWaveStartPos: Vec2 = { x: 135, y: 395 };
+  private tutorialResetDuringStep = false;
+  private lastTutorialUiKey = '';
 
   // One-thumb pointer state machine
   private activePointerId: number | null = null;
@@ -295,7 +305,7 @@ export class GameEngine {
     this.finishTutorial();
   }
 
-  private loadTutorialStage(stageIndex: number, preserveEffects = false): void {
+  private loadTutorialStage(stageIndex: number, preserveEffects = false, showBrief = true): void {
     const spawned = spawnTutorialStage(stageIndex);
     this.tutorialStageIndex = stageIndex;
     this.enemies = spawned.enemies;
@@ -314,9 +324,18 @@ export class GameEngine {
     this.roomTimer = 0;
     this.overheatWarnSecond = -1;
     this.tookDamageThisRoom = false;
-    this.tutorialUsedRam = false;
-    this.tutorialFiredChargedBrake = false;
-    this.tutorialUsedSlowMo = false;
+    this.tutorialBriefVisible = showBrief;
+    if (!showBrief && stageIndex === 2 && this.enemies[0]) {
+      this.enemies[0].fireTimer = 0.55;
+    }
+    this.tutorialRamKillCount = 0;
+    this.tutorialKilledByChargedShot = false;
+    this.tutorialDroneShielded = stageIndex === 2;
+    this.tutorialWaveActive = false;
+    this.tutorialWaveIndex = 0;
+    this.tutorialSlowMoDuringBullets = false;
+    this.tutorialMovedDuringWave = false;
+    this.lastTutorialUiKey = '';
 
     this.player.x = CANVAS_WIDTH / 2;
     this.player.y = 395;
@@ -333,11 +352,53 @@ export class GameEngine {
 
     this.audio.setMusicTrack(1, false);
     this.updateMusicIntensity();
+    this.emitTutorialStateIfChanged();
+  }
+
+  private emitTutorialStateIfChanged(): void {
+    if (!this.tutorialActive || this.phase !== 'playing') {
+      if (this.lastTutorialUiKey !== 'inactive') {
+        this.lastTutorialUiKey = 'inactive';
+        this.callbacks.onTutorialStateChange?.(null);
+      }
+      return;
+    }
+
+    const info = this.buildCurrentTutorialInfo();
+    const key = [
+      info.stageIndex,
+      info.briefVisible ? 1 : 0,
+      info.stepBadge,
+      info.promptLine1,
+      info.promptLine2,
+      info.droneBarrierActive ? 1 : 0,
+    ].join('|');
+
+    if (key !== this.lastTutorialUiKey) {
+      this.lastTutorialUiKey = key;
+      this.callbacks.onTutorialStateChange?.(info);
+    }
+  }
+
+  private buildCurrentTutorialInfo(): TutorialRenderInfo {
+    return buildTutorialRenderState({
+      stageIndex: this.tutorialStageIndex,
+      player: this.player,
+      enemies: this.enemies,
+      projectiles: this.projectiles,
+      isDragging: this.isSlingshotDragging,
+      slowMoActive: this.slowMoActive,
+      briefVisible: this.tutorialBriefVisible,
+      ramKillCount: this.tutorialRamKillCount,
+      droneBarrierActive: this.tutorialDroneShielded,
+      slowMoDuringBullets: this.tutorialSlowMoDuringBullets,
+    });
   }
 
   private resetCurrentTutorialDrill(hint: string): void {
+    this.tutorialResetDuringStep = true;
     this.clearPointerState(true);
-    this.loadTutorialStage(this.tutorialStageIndex, true);
+    this.loadTutorialStage(this.tutorialStageIndex, true, false);
     this.addFloatingText(CANVAS_WIDTH / 2, 225, hint, COLORS.textGold, 1.0);
   }
 
@@ -359,7 +420,9 @@ export class GameEngine {
     const returnToTitle = this.tutorialReturnToTitle;
     const postWeapon = this.tutorialPostStartWeapon;
     this.tutorialActive = false;
+    this.tutorialBriefVisible = false;
     this.clearPointerState(true);
+    this.emitTutorialStateIfChanged();
 
     if (returnToTitle) {
       this.selectedStartWeapon = postWeapon;
@@ -373,6 +436,8 @@ export class GameEngine {
   startNewRun(weapon = this.selectedStartWeapon): void {
     this.audio.init();
     this.tutorialActive = false;
+    this.tutorialBriefVisible = false;
+    this.emitTutorialStateIfChanged();
     this.selectedStartWeapon = weapon;
     this.player = this.createFreshPlayer(weapon);
     this.roomNumber = 1;
@@ -563,6 +628,10 @@ export class GameEngine {
     this.pointerDownTimeMs = nowMs;
     this.isSlingshotDragging = false;
     this.wasArmoredOnPointerDown = this.player.armored;
+    if (this.tutorialActive && this.tutorialBriefVisible) {
+      this.tutorialBriefVisible = false;
+      this.emitTutorialStateIfChanged();
+    }
   }
 
   handlePointerMove(canvasX: number, canvasY: number, pointerId: number): void {
@@ -579,8 +648,12 @@ export class GameEngine {
       this.isSlingshotDragging = true;
       this.focusRemainingSec = this.getMaxFocusDuration();
       this.slowMoActive = true;
-      if (this.tutorialActive) {
-        this.tutorialUsedSlowMo = true;
+      if (
+        this.tutorialActive &&
+        this.tutorialStageIndex === 2 &&
+        this.projectiles.some((pr) => !pr.fromPlayer)
+      ) {
+        this.tutorialSlowMoDuringBullets = true;
       }
       this.audio.playSlowMoEnter();
     }
@@ -613,6 +686,13 @@ export class GameEngine {
           this.player.aimDirX = dir.x;
           this.player.aimDirY = dir.y;
           this.player.armored = speed >= PHYSICS.ARMORED_SPEED_THRESHOLD;
+          if (
+            this.tutorialActive &&
+            this.tutorialStageIndex === 2 &&
+            (this.tutorialWaveActive || this.projectiles.some((pr) => !pr.fromPlayer))
+          ) {
+            this.tutorialMovedDuringWave = true;
+          }
           this.spawnSparks(this.player.x, this.player.y, -dir.x, -dir.y, COLORS.playerCore, 6, 40, 110);
         }
       } else if (
@@ -650,6 +730,28 @@ export class GameEngine {
   }
 
   private executeBrakeAndFire(): void {
+    if (this.tutorialActive && this.tutorialStageIndex === 0) {
+      this.addFloatingText(
+        this.player.x,
+        Math.max(ARENA.top + 14, this.player.y - 18),
+        'RAM ONLY! NO FIRE',
+        COLORS.textGold,
+        0.9,
+      );
+      return;
+    }
+
+    if (this.tutorialActive && this.tutorialStageIndex === 1 && this.player.chargeTier === 0) {
+      this.addFloatingText(
+        this.player.x,
+        Math.max(ARENA.top + 14, this.player.y - 18),
+        'BOUNCE WALL FIRST!',
+        COLORS.textGold,
+        0.9,
+      );
+      return;
+    }
+
     const preBrakeSpeed = len(this.player.vx, this.player.vy);
     const dir = normalizeOr(
       this.player.aimDirX,
@@ -715,6 +817,8 @@ export class GameEngine {
       }
     }
 
+    const preFireTier = this.player.chargeTier;
+
     fireActiveWeapon({
       player: this.player,
       enemies: this.enemies,
@@ -726,8 +830,17 @@ export class GameEngine {
       rings: this.rings,
       particles: this.particles,
       bonusDamage,
-      onDamageEnemy: (enemy, dmg, kx, ky, sx, sy) =>
-        this.damageEnemy(enemy, dmg, kx, ky, sx, sy, this.player.chargeTier >= 1),
+      onDamageEnemy: (enemy, dmg, kx, ky, sx, sy) => {
+        this.damageEnemy(enemy, dmg, kx, ky, sx, sy, preFireTier >= 1);
+        if (
+          this.tutorialActive &&
+          this.tutorialStageIndex === 1 &&
+          preFireTier >= 1 &&
+          enemy.hp <= 0
+        ) {
+          this.tutorialKilledByChargedShot = true;
+        }
+      },
       onHitHazard: (hazard, sx, sy) => this.hitHazard(hazard, sx, sy),
       onHitstop: (sec) => this.triggerHitstop(sec),
       onShake: (dx, dy, intensity) => this.addShake(dx, dy, intensity),
@@ -735,9 +848,6 @@ export class GameEngine {
     });
 
     // Charge resets after firing
-    if (this.tutorialActive && this.player.chargeTier >= 1) {
-      this.tutorialFiredChargedBrake = true;
-    }
     this.player.chargeTier = 0;
   }
 
@@ -770,8 +880,21 @@ export class GameEngine {
 
     if (this.phase !== 'playing') return;
 
+    if (this.tutorialActive && this.tutorialBriefVisible) {
+      this.updateEffects(rawDt);
+      this.emitTutorialStateIfChanged();
+      return;
+    }
+
     // Focus Ring countdown happens in real-time
     if (this.isSlingshotDragging && this.slowMoActive) {
+      if (
+        this.tutorialActive &&
+        this.tutorialStageIndex === 2 &&
+        this.projectiles.some((pr) => !pr.fromPlayer)
+      ) {
+        this.tutorialSlowMoDuringBullets = true;
+      }
       this.focusRemainingSec -= rawDt;
       if (this.focusRemainingSec <= 0) {
         this.focusRemainingSec = 0;
@@ -799,9 +922,14 @@ export class GameEngine {
         break;
       }
     }
+
+    if (this.tutorialActive) {
+      this.emitTutorialStateIfChanged();
+    }
   }
 
   stepSimulation(dt: number): void {
+    this.tutorialResetDuringStep = false;
     this.roomTimer += dt;
     this.checkOverheatWarning();
 
@@ -813,12 +941,89 @@ export class GameEngine {
     }
 
     this.updatePlayer(dt);
+    if (this.tutorialResetDuringStep) return;
     this.updateSawblades(dt);
+    if (this.tutorialResetDuringStep) return;
     this.updateProjectiles(dt);
+    if (this.tutorialResetDuringStep) return;
     this.updateEnemies(dt);
+    if (this.tutorialResetDuringStep) return;
     this.updateHazards(dt);
+    if (this.tutorialResetDuringStep) return;
     this.updateEffects(dt);
+    this.checkTutorialDodgeWave();
     this.cleanupDeadAndCheckClear();
+  }
+
+  private checkTutorialDodgeWave(): void {
+    if (
+      !this.tutorialActive ||
+      this.tutorialStageIndex !== 2 ||
+      !this.tutorialDroneShielded ||
+      !this.tutorialWaveActive
+    ) {
+      return;
+    }
+
+    if (
+      !this.tutorialMovedDuringWave &&
+      len(
+        this.player.x - this.tutorialWaveStartPos.x,
+        this.player.y - this.tutorialWaveStartPos.y,
+      ) >= 24
+    ) {
+      this.tutorialMovedDuringWave = true;
+    }
+
+    const enemyBullets = this.projectiles.filter((pr) => !pr.fromPlayer);
+    const hasEnemyBullets = enemyBullets.length > 0;
+
+    if (hasEnemyBullets) {
+      if (!this.tutorialSlowMoDuringBullets || !this.tutorialMovedDuringWave) {
+        return;
+      }
+      const allPassed = enemyBullets.every((pr) => {
+        const dx = this.player.x - pr.x;
+        const dy = this.player.y - pr.y;
+        const movingAway = dx * pr.vx + dy * pr.vy < -10;
+        const clearDist = len(dx, dy) > this.player.radius + pr.radius + 14;
+        return movingAway && clearDist;
+      });
+      if (!allPassed) return;
+    }
+
+    this.tutorialWaveActive = false;
+    if (this.tutorialSlowMoDuringBullets && this.tutorialMovedDuringWave) {
+      this.tutorialDroneShielded = false;
+      const drone = this.enemies[0];
+      if (drone) {
+        this.rings.push({
+          x: drone.x,
+          y: drone.y,
+          radius: drone.radius + 4,
+          maxRadius: drone.radius + 28,
+          color: COLORS.textCyan,
+          life: 0.35,
+          maxLife: 0.35,
+        });
+        this.addFloatingText(drone.x, drone.y - 16, 'BARRIER DOWN!', COLORS.textCyan, 1.05);
+      }
+      this.audio.playShieldBreak();
+    } else {
+      this.tutorialSlowMoDuringBullets = false;
+      this.tutorialMovedDuringWave = false;
+      this.addFloatingText(
+        CANVAS_WIDTH / 2,
+        225,
+        'USE 0.2X SLOW-MO TO DODGE!',
+        COLORS.textGold,
+        0.95,
+      );
+      const drone = this.enemies[0];
+      if (drone) {
+        drone.fireTimer = Math.min(drone.fireTimer ?? 0.55, 0.55);
+      }
+    }
   }
 
   private checkOverheatWarning(): void {
@@ -970,6 +1175,7 @@ export class GameEngine {
         if (h.triggered || h.kind !== 'barrel') continue;
         if (len(h.x - s.x, h.y - s.y) <= h.radius + s.radius) {
           this.hitHazard(h, s.x, s.y);
+          if (this.tutorialResetDuringStep) return;
         }
       }
 
@@ -982,6 +1188,7 @@ export class GameEngine {
   private updateProjectiles(dt: number): void {
     for (let i = this.projectiles.length - 1; i >= 0; i--) {
       const pr = this.projectiles[i];
+      if (!pr) continue;
       pr.life -= dt;
       if (pr.life <= 0) {
         this.projectiles.splice(i, 1);
@@ -1030,6 +1237,7 @@ export class GameEngine {
             if (h.triggered || h.kind !== 'barrel') continue;
             if (len(h.x - pr.x, h.y - pr.y) <= h.radius + pr.radius) {
               this.hitHazard(h, pr.x, pr.y);
+              if (this.tutorialResetDuringStep) return;
               hit = true;
               break;
             }
@@ -1057,6 +1265,7 @@ export class GameEngine {
         if (len(this.player.x - pr.x, this.player.y - pr.y) <= this.player.radius + pr.radius) {
           const dir = normalize(pr.vx, pr.vy);
           this.damagePlayer(pr.damage, dir.x, dir.y);
+          if (this.tutorialResetDuringStep) return;
           this.projectiles.splice(i, 1);
         }
       }
@@ -1201,21 +1410,53 @@ export class GameEngine {
             e.vy += (toAnchor.y * moveSpeed - e.vy) * Math.min(1, dt * 3.5);
           }
 
-          e.fireTimer = (e.fireTimer ?? 1.5) - dt;
-          if (e.fireTimer <= 0) {
-            for (let k = 0; k < 5; k++) {
-              this.spawnEnemyBullet(e.x, e.y, e.angle + (k * Math.PI * 2) / 5, 118, e.radius + 2, 3.2);
+          const waitTutorialWave =
+            this.tutorialActive &&
+            this.tutorialStageIndex === 2 &&
+            this.tutorialDroneShielded &&
+            (this.tutorialWaveActive || this.projectiles.some((pr) => !pr.fromPlayer));
+
+          if (!waitTutorialWave) {
+            const nextFire = (e.fireTimer ?? 1.5) - dt;
+            e.fireTimer = nextFire;
+            if (nextFire <= 0) {
+              if (this.tutorialActive && this.tutorialStageIndex === 2) {
+                if (this.tutorialDroneShielded) {
+                  const baseAim = Math.atan2(p.y - e.y, p.x - e.x);
+                  const stepRad = (15 * Math.PI) / 180;
+                  const gapSlot = this.tutorialWaveIndex % 2 === 0 ? 1 : -1;
+                  for (let slot = -3; slot <= 3; slot++) {
+                    if (slot === gapSlot) continue;
+                    this.spawnEnemyBullet(e.x, e.y, baseAim + slot * stepRad, 116, e.radius + 2, 3.4);
+                  }
+                  this.tutorialWaveIndex++;
+                  this.tutorialWaveActive = true;
+                  this.tutorialWaveStartPos = { x: p.x, y: p.y };
+                  this.tutorialSlowMoDuringBullets = this.slowMoActive;
+                  this.tutorialMovedDuringWave = false;
+                  e.fireTimer = 0.65;
+                } else {
+                  for (let k = 0; k < 5; k++) {
+                    this.spawnEnemyBullet(e.x, e.y, e.angle + (k * Math.PI * 2) / 5, 108, e.radius + 2, 3.2);
+                  }
+                  e.fireTimer = 2.4;
+                }
+              } else {
+                for (let k = 0; k < 5; k++) {
+                  this.spawnEnemyBullet(e.x, e.y, e.angle + (k * Math.PI * 2) / 5, 118, e.radius + 2, 3.2);
+                }
+                e.fireTimer = 1.9 + Math.random() * 0.5;
+              }
+              this.rings.push({
+                x: e.x,
+                y: e.y,
+                radius: e.radius,
+                maxRadius: e.radius + 14,
+                color: COLORS.drone,
+                life: 0.2,
+                maxLife: 0.2,
+              });
             }
-            this.rings.push({
-              x: e.x,
-              y: e.y,
-              radius: e.radius,
-              maxRadius: e.radius + 14,
-              color: COLORS.drone,
-              life: 0.2,
-              maxLife: 0.2,
-            });
-            e.fireTimer = 1.9 + Math.random() * 0.5;
           }
           break;
         }
@@ -1293,6 +1534,9 @@ export class GameEngine {
         this.spawnSparks(e.x, e.y, wallHit.normalX, wallHit.normalY, COLORS.textGold, 10, 50, 140);
         const slamDmg = COMBAT.WALL_SLAM_BONUS_DAMAGE + p.perks.heavy_ram;
         this.damageEnemy(e, slamDmg, 0, 0, e.x, e.y, true, true);
+        if (this.tutorialActive && this.tutorialStageIndex === 0 && e.hp <= 0) {
+          this.tutorialRamKillCount++;
+        }
 
         if (p.perks.explosive_slam > 0) {
           this.triggerExplosiveSlam(e.x, e.y, p.perks.explosive_slam);
@@ -1310,16 +1554,36 @@ export class GameEngine {
             this.clampToArena(p);
             this.clampToArena(e);
             this.damagePlayer(1, away.x, away.y);
+            if (this.tutorialResetDuringStep) return;
           } else if (e.kind === 'bomb_bot') {
             resolveCircleCollision(p, e, 0.9);
             this.clampToArena(p);
             this.clampToArena(e);
             this.detonateBombBot(e);
+            if (this.tutorialResetDuringStep) return;
           } else if (e.kind === 'boss' && isBossFrontShieldHit(e, p.x, p.y)) {
             resolveCircleCollision(p, e, 0.95);
             this.clampToArena(p);
             this.clampToArena(e);
             this.deflectOffBossShield(p.x, p.y);
+          } else if (this.tutorialActive && this.tutorialStageIndex === 1) {
+            resolveCircleCollision(p, e, 0.95);
+            this.clampToArena(p);
+            this.clampToArena(e);
+            this.audio.playShieldDeflect();
+            this.spawnSparks(e.x, e.y, p.x - e.x, p.y - e.y, COLORS.textGold, 6, 40, 100);
+            this.addFloatingText(e.x, e.y - 16, 'BOUNCE + TAP FIRE!', COLORS.textGold, 0.9);
+          } else if (
+            this.tutorialActive &&
+            this.tutorialStageIndex === 2 &&
+            this.tutorialDroneShielded
+          ) {
+            resolveCircleCollision(p, e, 0.95);
+            this.clampToArena(p);
+            this.clampToArena(e);
+            this.audio.playShieldDeflect();
+            this.spawnSparks(e.x, e.y, p.x - e.x, p.y - e.y, COLORS.textCyan, 6, 40, 100);
+            this.addFloatingText(e.x, e.y - 16, 'DODGE WAVE FIRST!', COLORS.textCyan, 0.9);
           } else {
             const ramDir = normalizeOr(e.x - p.x, e.y - p.y, p.aimDirX, p.aimDirY);
             resolveCircleCollision(p, e, 0.95);
@@ -1328,9 +1592,6 @@ export class GameEngine {
             const ramDmg = COMBAT.RAM_BASE_DAMAGE + (p.chargeTier >= 2 ? 1 : 0);
             const knockSpeed = 290 + p.chargeTier * 35 + p.perks.heavy_ram * 45;
             e.slammedTimer = 0.8;
-            if (this.tutorialActive) {
-              this.tutorialUsedRam = true;
-            }
             this.audio.playRam(p.chargeTier >= 2);
             this.triggerHitstop(COMBAT.HITSTOP_LIGHT_SEC);
             this.addShake(ramDir.x, ramDir.y, 3.5);
@@ -1343,6 +1604,9 @@ export class GameEngine {
               p.y,
               p.chargeTier >= 1,
             );
+            if (this.tutorialActive && this.tutorialStageIndex === 0 && e.hp <= 0) {
+              this.tutorialRamKillCount++;
+            }
           }
         } else {
           // Vulnerable: touching enemies hurts player
@@ -1355,6 +1619,7 @@ export class GameEngine {
           } else {
             this.damagePlayer(1, away.x, away.y);
           }
+          if (this.tutorialResetDuringStep) return;
         }
       }
     }
@@ -1580,6 +1845,13 @@ export class GameEngine {
   ): void {
     if (enemy.hp <= 0) return;
 
+    if (this.tutorialActive && this.tutorialStageIndex === 2 && this.tutorialDroneShielded) {
+      this.audio.playShieldDeflect();
+      this.spawnSparks(sourceX, sourceY, 0, 1, COLORS.textCyan, 6, 40, 100);
+      this.addFloatingText(enemy.x, enemy.y - 16, 'DODGE WAVE FIRST!', COLORS.textCyan, 0.9);
+      return;
+    }
+
     if (!ignoreShield && enemy.kind === 'boss' && isBossFrontShieldHit(enemy, sourceX, sourceY)) {
       this.deflectOffBossShield(sourceX, sourceY);
       return;
@@ -1767,16 +2039,21 @@ export class GameEngine {
 
     if (this.enemies.length === 0 && this.phase === 'playing') {
       if (this.tutorialActive) {
-        if (this.tutorialStageIndex === 0 && !this.tutorialUsedRam) {
-          this.resetCurrentTutorialDrill('RAM SLIMES AT SPEED!');
+        if (this.tutorialStageIndex === 0 && this.tutorialRamKillCount < 2) {
+          this.resetCurrentTutorialDrill('RAM BOTH SLIMES!');
           return;
         }
-        if (this.tutorialStageIndex === 1 && !this.tutorialFiredChargedBrake) {
+        if (this.tutorialStageIndex === 1 && !this.tutorialKilledByChargedShot) {
           this.resetCurrentTutorialDrill('BOUNCE WALL + TAP FIRE!');
           return;
         }
-        if (this.tutorialStageIndex === 2 && !this.tutorialUsedSlowMo) {
-          this.resetCurrentTutorialDrill('DRAG FOR 0.2X SLOW-MO!');
+        if (
+          this.tutorialStageIndex === 2 &&
+          (this.tutorialDroneShielded ||
+            !this.tutorialSlowMoDuringBullets ||
+            !this.tutorialMovedDuringWave)
+        ) {
+          this.resetCurrentTutorialDrill('DODGE WITH 0.2X SLOW-MO!');
           return;
         }
         this.advanceTutorialStage();
@@ -1920,18 +2197,7 @@ export class GameEngine {
   }
 
   getRenderState(): RenderState {
-    const tutorial = this.tutorialActive
-      ? buildTutorialRenderState({
-          stageIndex: this.tutorialStageIndex,
-          player: this.player,
-          enemies: this.enemies,
-          hazards: this.hazards,
-          projectiles: this.projectiles,
-          isDragging: this.isSlingshotDragging,
-          slowMoActive: this.slowMoActive,
-          usedSlowMo: this.tutorialUsedSlowMo,
-        })
-      : undefined;
+    const tutorial = this.tutorialActive ? this.buildCurrentTutorialInfo() : undefined;
 
     return {
       phase: this.phase,
