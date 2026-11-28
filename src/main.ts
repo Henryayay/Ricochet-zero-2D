@@ -59,7 +59,10 @@ const engine = new GameEngine({
   onMuteChange(muted) {
     const muteBtn = document.getElementById('btn-mute');
     if (muteBtn) {
-      muteBtn.textContent = muted ? 'SND: OFF' : 'SND: ON';
+      muteBtn.innerHTML = getMuteIconSvg(muted);
+      muteBtn.classList.toggle('muted', muted);
+      muteBtn.setAttribute('aria-label', muted ? 'Unmute sound' : 'Mute sound');
+      muteBtn.title = muted ? 'Sound: Off' : 'Sound: On';
     }
   },
   onTutorialStateChange(info) {
@@ -136,18 +139,27 @@ document.addEventListener('visibilitychange', () => {
 
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
+const SETTINGS_ICON_SVG = `<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="square" aria-hidden="true"><circle cx="8" cy="8" r="2.6"/><path d="M8 1.8v1.7M8 12.5v1.7M1.8 8h1.7M12.5 8h1.7M3.6 3.6l1.2 1.2M11.2 11.2l1.2 1.2M12.4 3.6l-1.2 1.2M4.8 11.2l-1.2 1.2"/></svg>`;
+
+function getMuteIconSvg(muted: boolean): string {
+  if (muted) {
+    return `<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="square" aria-hidden="true"><path d="M2.5 6h2.6l3.4-2.8v9.6L5.1 10H2.5z" fill="currentColor" stroke="none"/><path d="M11 6l3 4M14 6l-3 4"/></svg>`;
+  }
+  return `<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="square" aria-hidden="true"><path d="M2.5 6h2.6l3.4-2.8v9.6L5.1 10H2.5z" fill="currentColor" stroke="none"/><path d="M10.8 5.6a3.5 3.5 0 0 1 0 4.8M12.7 3.8a6 6 0 0 1 0 8.4"/></svg>`;
+}
+
 function renderMuteBar(phase: GamePhase): string {
-  const label = engine.audio.isMuted() ? 'SND: OFF' : 'SND: ON';
+  const muted = engine.audio.isMuted();
   const skipBtn =
     engine.isTutorialActive() && phase === 'playing'
       ? `<button id="btn-skip-tutorial" class="pixel-btn-mini skip ui-interactive" type="button">SKIP</button>`
       : '';
-  const setLabel = phase === 'playing' ? 'PAUSE' : 'OPT';
+  const setLabel = phase === 'playing' ? 'Pause & Settings' : 'Settings';
   return `
     <div class="hud-top-actions">
       ${skipBtn}
-      <button id="btn-mute" class="pixel-btn-mini ui-interactive" type="button">${label}</button>
-      <button id="btn-open-settings" class="pixel-btn-mini ui-interactive" type="button">${setLabel}</button>
+      <button id="btn-mute" class="pixel-icon-btn ${muted ? 'muted' : ''} ui-interactive" type="button" aria-label="${muted ? 'Unmute sound' : 'Mute sound'}" title="${muted ? 'Sound: Off' : 'Sound: On'}">${getMuteIconSvg(muted)}</button>
+      <button id="btn-open-settings" class="pixel-icon-btn ui-interactive" type="button" aria-label="${setLabel}" title="${setLabel}">${SETTINGS_ICON_SVG}</button>
     </div>
   `;
 }

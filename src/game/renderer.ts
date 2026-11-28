@@ -2200,7 +2200,7 @@ export class GameRenderer {
       curX += 9;
     }
 
-    // 3. Room Number / Tutorial Stage
+    // 3. Room Number / Tutorial Stage (shifted slightly left to leave clean score lane)
     const isTut = Boolean(state.tutorial?.active);
     const roomStr = isTut
       ? `TUT ${state.tutorial!.stageIndex + 1}/${state.tutorial!.stageCount}`
@@ -2208,17 +2208,17 @@ export class GameRenderer {
     this.drawPixelText(
       ctx,
       roomStr,
-      isTut ? 124 : 132,
+      isTut ? 120 : 114,
       7,
       isTut ? COLORS.textCyan : COLORS.textWhite,
       1,
       'center',
     );
 
-    // 4. Score (hidden in tutorial to leave clean space for SKIP + SND buttons)
+    // 4. Score (hidden in tutorial; clears top-right icon buttons cleanly)
     if (!isTut) {
       const scoreStr = String(Math.max(0, Math.floor(state.score)));
-      this.drawPixelText(ctx, scoreStr, 210, 7, COLORS.textGold, 1, 'right');
+      this.drawPixelText(ctx, scoreStr, 206, 7, COLORS.textGold, 1, 'right');
     }
 
     // --- Row 2 (y: 21..32) ---
