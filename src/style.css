@@ -91,7 +91,35 @@ body {
   display: flex;
   justify-content: flex-end;
   align-items: flex-start;
-  gap: 6px;
+  gap: 4px;
+}
+
+.pixel-icon-btn {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(16, 19, 34, 0.88);
+  border: 1px solid #344270;
+  color: var(--text-main);
+  cursor: pointer;
+  box-shadow: 0 1px 0 #05060b;
+}
+
+.pixel-icon-btn:hover {
+  border-color: var(--neon-cyan);
+  color: var(--neon-cyan);
+}
+
+.pixel-icon-btn:active {
+  transform: translateY(1px);
+}
+
+.pixel-icon-btn.muted {
+  color: var(--text-dim);
+  border-color: #262e4e;
 }
 
 .pixel-btn-mini {
@@ -609,4 +637,176 @@ body {
   to {
     opacity: 1;
   }
+}
+
+.title-sub-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.draft-badges {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.rarity-pill {
+  font-size: 8px;
+  font-weight: 900;
+  letter-spacing: 0.09em;
+  padding: 2px 5px;
+  border: 1px solid currentColor;
+  background: rgba(6, 8, 17, 0.75);
+}
+
+.rarity-pill.rarity-common {
+  color: #9aa8cc;
+}
+
+.rarity-pill.rarity-rare {
+  color: #2cf5ff;
+}
+
+.rarity-pill.rarity-epic {
+  color: #b967ff;
+}
+
+.rarity-pill.rarity-heroic {
+  color: #ffd447;
+}
+
+.rarity-pill.rarity-mythic {
+  color: #ff2e88;
+}
+
+.draft-card.rarity-common {
+  border-color: #364166;
+}
+
+.draft-card.rarity-rare {
+  border-color: #238699;
+  box-shadow: 0 3px 0 #060811, 0 0 10px rgba(44, 245, 255, 0.14);
+}
+
+.draft-card.rarity-epic {
+  border-color: #7c3ec9;
+  background: #171430;
+  box-shadow: 0 3px 0 #060811, 0 0 12px rgba(185, 103, 255, 0.22);
+}
+
+.draft-card.rarity-heroic {
+  border-color: #b88b1e;
+  background: #1e1912;
+  box-shadow: 0 3px 0 #060811, 0 0 14px rgba(255, 212, 71, 0.24);
+}
+
+.draft-card.rarity-mythic {
+  border-color: #c41d67;
+  background: #231020;
+  box-shadow: 0 3px 0 #060811, 0 0 16px rgba(255, 46, 136, 0.3);
+}
+
+.settings-backdrop {
+  z-index: 30;
+  background: rgba(5, 7, 14, 0.9);
+}
+
+.settings-modal {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.settings-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  border-bottom: 1px solid #252b48;
+  padding-bottom: 6px;
+}
+
+.settings-header h2 {
+  margin: 0;
+  font-size: 15px;
+  color: var(--neon-cyan);
+  letter-spacing: 0.1em;
+}
+
+.settings-sub {
+  font-size: 9px;
+  color: var(--text-dim);
+  letter-spacing: 0.08em;
+}
+
+.settings-row {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.settings-toggle-row {
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+}
+
+.settings-label-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.07em;
+  color: var(--text-main);
+}
+
+.settings-lock {
+  color: var(--neon-gold);
+  font-size: 9px;
+}
+
+.settings-slider {
+  width: 100%;
+  accent-color: var(--neon-cyan);
+  cursor: pointer;
+}
+
+.difficulty-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+
+.difficulty-chip {
+  background: #0b0e1b;
+  border: 2px solid #283152;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  padding: 6px 4px;
+  cursor: pointer;
+}
+
+.difficulty-chip.active {
+  border-color: var(--neon-cyan);
+  color: var(--neon-cyan);
+  background: #102033;
+}
+
+.difficulty-chip:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.settings-diff-desc {
+  font-size: 10px;
+  line-height: 1.35;
+  color: var(--text-dim);
 }

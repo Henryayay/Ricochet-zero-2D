@@ -512,8 +512,15 @@ export class GameRenderer {
 
     // 4. Prominent Slow-Mo time-dilation overlay inside arena
     if (state.phase === 'playing' && state.aim.slowMoActive) {
-      ctx.fillStyle = 'rgba(8, 18, 44, 0.45)';
+      ctx.fillStyle = 'rgba(6, 16, 40, 0.5)';
       ctx.fillRect(ARENA.left, ARENA.top, ARENA.width, ARENA.height);
+
+      // Edge vignette frames for unmistakable Matrix focus feedback
+      ctx.fillStyle = 'rgba(44, 245, 255, 0.08)';
+      ctx.fillRect(ARENA.left, ARENA.top, ARENA.width, 8);
+      ctx.fillRect(ARENA.left, ARENA.bottom - 8, ARENA.width, 8);
+      ctx.fillRect(ARENA.left, ARENA.top, 8, ARENA.height);
+      ctx.fillRect(ARENA.right - 8, ARENA.top, 8, ARENA.height);
 
       // Subtle horizontal CRT / time-dilation scanlines every 4px
       ctx.fillStyle = 'rgba(44, 245, 255, 0.06)';
@@ -522,7 +529,7 @@ export class GameRenderer {
       }
 
       // Crisp 1px pulsing cyan inner border around ARENA
-      const borderAlpha = 0.55 + 0.45 * Math.sin(state.time * 16);
+      const borderAlpha = 0.6 + 0.4 * Math.sin(state.time * 16);
       ctx.fillStyle = `rgba(44, 245, 255, ${borderAlpha.toFixed(3)})`;
       ctx.fillRect(ARENA.left, ARENA.top, ARENA.width, 1);
       ctx.fillRect(ARENA.left, ARENA.bottom - 1, ARENA.width, 1);
@@ -1732,14 +1739,14 @@ export class GameRenderer {
       }
     }
 
-    // Crisp 0.2x pixel tag just below/above the Focus Ring while slow-mo is active
+    // Crisp 0.12x pixel tag just below/above the Focus Ring while slow-mo is active
     if (aim.slowMoActive) {
-      const tagX = clamp(Math.round(px), ARENA.left + 12, ARENA.right - 12);
+      const tagX = clamp(Math.round(px), ARENA.left + 14, ARENA.right - 14);
       const tagY =
         py + ringRadius + 10 < ARENA.bottom - 2
           ? Math.round(py + ringRadius + 4)
           : Math.round(py - ringRadius - 9);
-      this.drawPixelText(ctx, '0.2x', tagX, tagY, COLORS.textCyan, 1, 'center');
+      this.drawPixelText(ctx, '0.12x', tagX, tagY, COLORS.textCyan, 1, 'center');
     }
 
     // 2. Dotted raycast trajectory preview along aim.previewPoints
@@ -2193,7 +2200,7 @@ export class GameRenderer {
       curX += 9;
     }
 
-    // 3. Room Number / Tutorial Stage
+    // 3. Room Number / Tutorial Stage (shifted slightly left to leave clean score lane)
     const isTut = Boolean(state.tutorial?.active);
     const roomStr = isTut
       ? `TUT ${state.tutorial!.stageIndex + 1}/${state.tutorial!.stageCount}`
@@ -2201,17 +2208,17 @@ export class GameRenderer {
     this.drawPixelText(
       ctx,
       roomStr,
-      isTut ? 124 : 132,
+      isTut ? 120 : 114,
       7,
       isTut ? COLORS.textCyan : COLORS.textWhite,
       1,
       'center',
     );
 
-    // 4. Score (hidden in tutorial to leave clean space for SKIP + SND buttons)
+    // 4. Score (hidden in tutorial; clears top-right icon buttons cleanly)
     if (!isTut) {
       const scoreStr = String(Math.max(0, Math.floor(state.score)));
-      this.drawPixelText(ctx, scoreStr, 210, 7, COLORS.textGold, 1, 'right');
+      this.drawPixelText(ctx, scoreStr, 206, 7, COLORS.textGold, 1, 'right');
     }
 
     // --- Row 2 (y: 21..32) ---

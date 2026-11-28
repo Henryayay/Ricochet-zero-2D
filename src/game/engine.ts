@@ -6,6 +6,7 @@ import {
   COLORS,
   COMBAT,
   CONTROLS,
+  DIFFICULTY_CONFIG,
   OVERHEAT,
   PERK_MAX_RANKS,
   PHYSICS,
@@ -16,16 +17,22 @@ import {
   allocEntityId,
   ArcEffect,
   BeamEffect,
+  createInitialPerkRarities,
   createInitialPerks,
+  createInitialWeaponModRarities,
   createInitialWeaponMods,
+  DifficultyId,
+  DifficultyRecord,
   DraftOption,
   Enemy,
   FloatingText,
+  GameSettings,
   Hazard,
   Particle,
   PerkId,
   PlayerState,
   Projectile,
+  RarityId,
   RingEffect,
   Sawblade,
   Vec2,
@@ -46,6 +53,9 @@ import {
   generateDraftOptions,
   generateRoom,
   generateWeaponTransferOptions,
+  getMasteryRankGain,
+  getRarityMultiplier,
+  MASTERY_PERKS,
 } from './rooms.ts';
 import {
   buildTutorialRenderState,
@@ -76,6 +86,8 @@ export interface EngineCallbacks {
   onGameOver?: (summary: RunSummary) => void;
   onMuteChange?: (muted: boolean) => void;
   onTutorialStateChange?: (info: TutorialRenderInfo | null) => void;
+  onSettingsChange?: (settings: GameSettings) => void;
+  onPauseChange?: (paused: boolean) => void;
 }
 
 export class GameEngine {
@@ -126,6 +138,23 @@ export class GameEngine {
   private multiKillTimer = 0;
   private selectedStartWeapon: WeaponId = 'railgun';
   private pendingWeaponTransfers = 0;
+  private paused = false;
+  private postSlowMoLaunchTimer = 0;
+  private timeSinceWallBounce = 99;
+
+  private settings: GameSettings = {
+    bgmVolume: 1.0,
+    sfxVolume: 1.0,
+    pullSensitivityPx: CONTROLS.SLINGSHOT_MAX_PULL_PX,
+    screenShake: true,
+    difficulty: 'standard',
+  };
+
+  private records: Record<DifficultyId, DifficultyRecord> = {
+    chill: { bestScore: 0, bestRoom: 1 },
+    standard: { bestScore: 0, bestRoom: 1 },
+    overdrive: { bestScore: 0, bestRoom: 1 },
+  };
 
   // Interactive tutorial state
   private tutorialCompleted = false;
@@ -150,6 +179,7 @@ export class GameEngine {
   private pointerDownPos: Vec2 = { x: 0, y: 0 };
   private pointerCurPos: Vec2 = { x: 0, y: 0 };
   private pointerDownTimeMs = 0;
+  private pointerHoldMs = 0;
   private isSlingshotDragging = false;
   private wasArmoredOnPointerDown = false;
   private slowMoActive = false;
@@ -161,6 +191,12 @@ export class GameEngine {
     this.loadPersistentState();
   }
 
+  private syncBestFromRecord(): void {
+    const rec = this.records[this.settings.difficulty];
+    this.bestScore = rec.bestScore;
+    this.bestRoom = rec.bestRoom;
+  }
+
   private loadPersistentState(): void {
     try {
       if (typeof localStorage === 'undefined') return;
@@ -168,10 +204,58 @@ export class GameEngine {
       const br = Number(localStorage.getItem(STORAGE_KEYS.BEST_ROOM) ?? '1');
       const muted = localStorage.getItem(STORAGE_KEYS.MUTED) === '1';
       const tutDone = localStorage.getItem(STORAGE_KEYS.TUTORIAL_DONE) === '1';
-      if (Number.isFinite(bs) && bs > 0) this.bestScore = bs;
-      if (Number.isFinite(br) && br >= 1) this.bestRoom = br;
+      if (Number.isFinite(bs) && bs > 0) this.records.standard.bestScore = bs;
+      if (Number.isFinite(br) && br >= 1) this.records.standard.bestRoom = br;
+
+      const rawSettings = localStorage.getItem(STORAGE_KEYS.SETTINGS);
+      if (rawSettings) {
+        const parsed = JSON.parse(rawSettings) as Partial<GameSettings>;
+        if (typeof parsed.bgmVolume === 'number' && Number.isFinite(parsed.bgmVolume)) {
+          this.settings.bgmVolume = clamp(parsed.bgmVolume, 0, 1);
+        }
+        if (typeof parsed.sfxVolume === 'number' && Number.isFinite(parsed.sfxVolume)) {
+          this.settings.sfxVolume = clamp(parsed.sfxVolume, 0, 1);
+        }
+        if (typeof parsed.pullSensitivityPx === 'number' && Number.isFinite(parsed.pullSensitivityPx)) {
+          this.settings.pullSensitivityPx = clamp(
+            parsed.pullSensitivityPx,
+            CONTROLS.MIN_PULL_SENSITIVITY_PX,
+            CONTROLS.MAX_PULL_SENSITIVITY_PX,
+          );
+        }
+        if (typeof parsed.screenShake === 'boolean') {
+          this.settings.screenShake = parsed.screenShake;
+        }
+        if (
+          parsed.difficulty === 'chill' ||
+          parsed.difficulty === 'standard' ||
+          parsed.difficulty === 'overdrive'
+        ) {
+          this.settings.difficulty = parsed.difficulty;
+        }
+      }
+
+      const rawRecords = localStorage.getItem(STORAGE_KEYS.RECORDS);
+      if (rawRecords) {
+        const parsed = JSON.parse(rawRecords) as Partial<Record<DifficultyId, Partial<DifficultyRecord>>>;
+        for (const d of ['chill', 'standard', 'overdrive'] as const) {
+          const r = parsed[d];
+          if (r) {
+            if (typeof r.bestScore === 'number' && Number.isFinite(r.bestScore) && r.bestScore >= 0) {
+              this.records[d].bestScore = Math.max(this.records[d].bestScore, r.bestScore);
+            }
+            if (typeof r.bestRoom === 'number' && Number.isFinite(r.bestRoom) && r.bestRoom >= 1) {
+              this.records[d].bestRoom = Math.max(this.records[d].bestRoom, r.bestRoom);
+            }
+          }
+        }
+      }
+
+      this.syncBestFromRecord();
       this.tutorialCompleted = tutDone;
       this.audio.setMuted(muted);
+      this.audio.setBgmVolume(this.settings.bgmVolume);
+      this.audio.setSfxVolume(this.settings.sfxVolume);
     } catch {
       // Ignore storage failures in restricted contexts
     }
@@ -180,13 +264,97 @@ export class GameEngine {
   private savePersistentState(): void {
     try {
       if (typeof localStorage === 'undefined') return;
-      localStorage.setItem(STORAGE_KEYS.BEST_SCORE, String(Math.floor(this.bestScore)));
-      localStorage.setItem(STORAGE_KEYS.BEST_ROOM, String(this.bestRoom));
+      this.records[this.settings.difficulty].bestScore = Math.max(
+        this.records[this.settings.difficulty].bestScore,
+        Math.floor(this.bestScore),
+      );
+      this.records[this.settings.difficulty].bestRoom = Math.max(
+        this.records[this.settings.difficulty].bestRoom,
+        this.bestRoom,
+      );
+      localStorage.setItem(STORAGE_KEYS.BEST_SCORE, String(Math.floor(this.records.standard.bestScore)));
+      localStorage.setItem(STORAGE_KEYS.BEST_ROOM, String(this.records.standard.bestRoom));
       localStorage.setItem(STORAGE_KEYS.MUTED, this.audio.isMuted() ? '1' : '0');
       localStorage.setItem(STORAGE_KEYS.TUTORIAL_DONE, this.tutorialCompleted ? '1' : '0');
+      localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(this.settings));
+      localStorage.setItem(STORAGE_KEYS.RECORDS, JSON.stringify(this.records));
     } catch {
       // Ignore storage failures
     }
+  }
+
+  getSettings(): GameSettings {
+    return { ...this.settings };
+  }
+
+  getDifficultyRecord(difficulty: DifficultyId = this.settings.difficulty): DifficultyRecord {
+    return { ...this.records[difficulty] };
+  }
+
+  updateSettings(patch: Partial<GameSettings>): void {
+    if (patch.bgmVolume !== undefined) {
+      this.settings.bgmVolume = clamp(patch.bgmVolume, 0, 1);
+      this.audio.setBgmVolume(this.settings.bgmVolume);
+    }
+    if (patch.sfxVolume !== undefined) {
+      this.settings.sfxVolume = clamp(patch.sfxVolume, 0, 1);
+      this.audio.setSfxVolume(this.settings.sfxVolume);
+    }
+    if (patch.pullSensitivityPx !== undefined) {
+      this.settings.pullSensitivityPx = clamp(
+        patch.pullSensitivityPx,
+        CONTROLS.MIN_PULL_SENSITIVITY_PX,
+        CONTROLS.MAX_PULL_SENSITIVITY_PX,
+      );
+    }
+    if (patch.screenShake !== undefined) {
+      this.settings.screenShake = patch.screenShake;
+      if (!this.settings.screenShake) {
+        this.shakeTimer = 0;
+        this.shakeX = 0;
+        this.shakeY = 0;
+      }
+    }
+    // Difficulty can only change when not in an active run (title or gameover)
+    if (
+      patch.difficulty !== undefined &&
+      (this.phase === 'title' || this.phase === 'gameover')
+    ) {
+      this.settings.difficulty = patch.difficulty;
+      this.syncBestFromRecord();
+    }
+    this.savePersistentState();
+    this.callbacks.onSettingsChange?.(this.getSettings());
+  }
+
+  isPaused(): boolean {
+    return this.paused;
+  }
+
+  setPaused(paused: boolean): void {
+    if (this.phase !== 'playing' && paused) return;
+    if (this.paused === paused) return;
+    this.paused = paused;
+    if (paused) {
+      this.cancelActiveInput();
+    }
+    this.callbacks.onPauseChange?.(this.paused);
+  }
+
+  togglePause(): boolean {
+    this.setPaused(!this.paused);
+    return this.paused;
+  }
+
+  quitToTitle(): void {
+    this.paused = false;
+    this.tutorialActive = false;
+    this.tutorialBriefVisible = false;
+    this.clearPointerState(true);
+    this.audio.stopMusic();
+    this.setPhase('title');
+    this.callbacks.onPauseChange?.(false);
+    this.emitTutorialStateIfChanged();
   }
 
   private createFreshPlayer(weapon: WeaponId): PlayerState {
@@ -207,8 +375,10 @@ export class GameEngine {
       armored: false,
       weapon,
       weaponMods: createInitialWeaponMods(),
+      weaponModRarities: createInitialWeaponModRarities(),
       weaponUpgradeBudget: 0,
       perks: createInitialPerks(),
+      perkRarities: createInitialPerkRarities(),
       trail: [],
       flashTimer: 0,
     };
@@ -435,6 +605,8 @@ export class GameEngine {
 
   startNewRun(weapon = this.selectedStartWeapon): void {
     this.audio.init();
+    this.paused = false;
+    this.callbacks.onPauseChange?.(false);
     this.tutorialActive = false;
     this.tutorialBriefVisible = false;
     this.emitTutorialStateIfChanged();
@@ -449,6 +621,8 @@ export class GameEngine {
     this.multiKillCount = 0;
     this.multiKillTimer = 0;
     this.pendingWeaponTransfers = 0;
+    this.postSlowMoLaunchTimer = 0;
+    this.timeSinceWallBounce = 99;
     this.clearPointerState(false);
     this.loadRoom(1);
     this.setPhase('playing');
@@ -471,7 +645,7 @@ export class GameEngine {
   }
 
   private loadRoom(roomNum: number): void {
-    const spawned = generateRoom(roomNum);
+    const spawned = generateRoom(roomNum, this.settings.difficulty);
     this.enemies = spawned.enemies;
     this.hazards = spawned.hazards;
     this.isBossRoom = spawned.isBossRoom;
@@ -515,36 +689,47 @@ export class GameEngine {
     this.audio.playDraftPick();
 
     if (option.kind === 'weapon_mod' && option.weaponModId) {
-      const current = this.player.weaponMods[option.weaponModId] ?? 0;
-      this.player.weaponMods[option.weaponModId] = Math.min(
-        COMBAT.MAX_WEAPON_MOD_RANK,
-        current + 1,
-      );
-
-      if (this.pendingWeaponTransfers > 0) {
-        this.pendingWeaponTransfers -= 1;
-        if (this.pendingWeaponTransfers > 0) {
-          const transferOpts = generateWeaponTransferOptions(this.player, this.player.weapon);
-          if (transferOpts.length > 0) {
-            this.callbacks.onDraftReady?.(
-              transferOpts,
-              this.roomNumber,
-              this.pendingWeaponTransfers,
-              this.player.weapon,
-            );
-            return;
-          }
-          this.pendingWeaponTransfers = 0;
-        }
+      if (!this.player.weaponModRarities) {
+        this.player.weaponModRarities = createInitialWeaponModRarities();
+      }
+      if (option.isRarityUpgrade && option.rarity) {
+        this.player.weaponModRarities[option.weaponModId] = option.rarity;
       } else {
-        this.player.weaponUpgradeBudget = Math.min(
-          COMBAT.MAX_WEAPON_UPGRADES,
-          this.player.weaponUpgradeBudget + 1,
+        const current = this.player.weaponMods[option.weaponModId] ?? 0;
+        this.player.weaponMods[option.weaponModId] = Math.min(
+          COMBAT.MAX_WEAPON_MOD_RANK,
+          current + 1,
         );
+        if (option.rarity) {
+          this.player.weaponModRarities[option.weaponModId] = option.rarity;
+        }
+
+        if (this.pendingWeaponTransfers > 0) {
+          this.pendingWeaponTransfers -= 1;
+          if (this.pendingWeaponTransfers > 0) {
+            const transferOpts = generateWeaponTransferOptions(this.player, this.player.weapon);
+            if (transferOpts.length > 0) {
+              this.callbacks.onDraftReady?.(
+                transferOpts,
+                this.roomNumber,
+                this.pendingWeaponTransfers,
+                this.player.weapon,
+              );
+              return;
+            }
+            this.pendingWeaponTransfers = 0;
+          }
+        } else {
+          this.player.weaponUpgradeBudget = Math.min(
+            COMBAT.MAX_WEAPON_UPGRADES,
+            this.player.weaponUpgradeBudget + 1,
+          );
+        }
       }
     } else if (option.kind === 'weapon' && option.weaponId) {
       this.player.weapon = option.weaponId;
       this.player.weaponMods = createInitialWeaponMods();
+      this.player.weaponModRarities = createInitialWeaponModRarities();
       if (this.player.weaponUpgradeBudget > 0) {
         this.pendingWeaponTransfers = this.player.weaponUpgradeBudget;
         const transferOpts = generateWeaponTransferOptions(this.player, this.player.weapon);
@@ -560,7 +745,7 @@ export class GameEngine {
         this.pendingWeaponTransfers = 0;
       }
     } else if (option.kind === 'perk' && option.perkId) {
-      this.applyPerk(option.perkId);
+      this.applyPerk(option.perkId, option.rarity ?? 'common', Boolean(option.isRarityUpgrade));
     }
 
     this.roomNumber += 1;
@@ -572,7 +757,9 @@ export class GameEngine {
     if (this.phase !== 'draft' || this.pendingWeaponTransfers > 0) return;
     this.audio.init();
     this.audio.playDraftPick();
-    const bonus = Math.round(COMBAT.SKIP_DRAFT_BASE_BONUS * this.flowMultiplier);
+    const bonus = Math.round(
+      COMBAT.SKIP_DRAFT_BASE_BONUS * this.flowMultiplier * this.getScoreMultiplier(),
+    );
     this.score += bonus;
     if (this.score > this.bestScore) this.bestScore = this.score;
     this.savePersistentState();
@@ -581,9 +768,24 @@ export class GameEngine {
     this.setPhase('playing');
   }
 
-  private applyPerk(perkId: PerkId): void {
+  private applyPerk(perkId: PerkId, rarity: RarityId = 'common', isRarityUpgrade = false): void {
+    if (!this.player.perkRarities) {
+      this.player.perkRarities = createInitialPerkRarities();
+    }
     const cap = PERK_MAX_RANKS[perkId];
+    if (isRarityUpgrade) {
+      this.player.perkRarities[perkId] = rarity;
+      return;
+    }
+    if (MASTERY_PERKS.includes(perkId)) {
+      const gain = getMasteryRankGain(rarity);
+      this.player.perks[perkId] = Math.min(cap, (this.player.perks[perkId] ?? 0) + gain);
+      this.player.perkRarities[perkId] = rarity;
+      return;
+    }
+
     this.player.perks[perkId] = Math.min(cap, (this.player.perks[perkId] ?? 0) + 1);
+    this.player.perkRarities[perkId] = rarity;
     if (perkId === 'max_shield') {
       this.player.maxShield = Math.min(COMBAT.HARD_MAX_SHIELD, this.player.maxShield + 1);
       this.player.shield = this.player.maxShield;
@@ -595,37 +797,71 @@ export class GameEngine {
     }
   }
 
+  private getPerkPower(perkId: PerkId): number {
+    const rank = this.player.perks?.[perkId] ?? 0;
+    if (rank <= 0) return 0;
+    const rarity = this.player.perkRarities?.[perkId] ?? 'common';
+    return rank * getRarityMultiplier(rarity);
+  }
+
+  private getScoreMultiplier(): number {
+    return (
+      DIFFICULTY_CONFIG[this.settings.difficulty].scoreMul *
+      (1 + (this.player.perks?.overclock_score ?? 0) * 0.08)
+    );
+  }
+
+  private getEnemyBulletSpeedMul(): number {
+    if (this.tutorialActive) return 1.0;
+    const roomScale = 1 + Math.min(0.45, Math.max(0, this.roomNumber - 12) * 0.015);
+    return DIFFICULTY_CONFIG[this.settings.difficulty].enemyBulletSpeedMul * roomScale;
+  }
+
+  private getEnemyCooldownMul(): number {
+    if (this.tutorialActive) return 1.0;
+    const roomCompress = 1 + Math.min(0.4, Math.max(0, this.roomNumber - 12) * 0.012);
+    return DIFFICULTY_CONFIG[this.settings.difficulty].enemyCooldownMul / roomCompress;
+  }
+
   private getOverheatDelaySec(): number {
-    return this.player.perks.overheat_vent * 4;
+    return this.getPerkPower('overheat_vent') * 4;
   }
 
   private getMaxFlowMultiplier(): number {
-    return 5.0 + this.player.perks.flow_surge * 2.0;
+    return 5.0 + this.player.perks.flow_surge * 2.0 + (this.player.perks.velocity_tuning ?? 0) * 0.15;
   }
 
   // ---- Input State Machine ----
 
   private getMaxFocusDuration(): number {
-    return CONTROLS.AIM_MAX_DURATION_SEC + this.player.perks.longer_focus * 0.4;
+    return (
+      CONTROLS.AIM_MAX_DURATION_SEC +
+      this.getPerkPower('longer_focus') * 0.4 +
+      DIFFICULTY_CONFIG[this.settings.difficulty].focusBonusSec
+    );
   }
 
   private getMaxLaunchSpeed(): number {
-    return PHYSICS.MAX_LAUNCH_SPEED * (1 + this.player.perks.bounce_speed * 0.12);
+    return (
+      PHYSICS.MAX_LAUNCH_SPEED *
+      (1 + this.getPerkPower('bounce_speed') * 0.12 + (this.player.perks.velocity_tuning ?? 0) * 0.03)
+    );
   }
 
   private getWallRestitution(): number {
-    return Math.min(1.04, PHYSICS.WALL_RESTITUTION * (1 + this.player.perks.bounce_speed * 0.06));
+    return Math.min(1.04, PHYSICS.WALL_RESTITUTION * (1 + this.getPerkPower('bounce_speed') * 0.05));
   }
 
   handlePointerDown(canvasX: number, canvasY: number, pointerId: number, nowMs: number): void {
     this.audio.init();
-    if (this.phase !== 'playing') return;
+    if (this.phase !== 'playing' || this.paused) return;
     if (this.activePointerId !== null) return;
 
     this.activePointerId = pointerId;
     this.pointerDownPos = { x: canvasX, y: canvasY };
     this.pointerCurPos = { x: canvasX, y: canvasY };
     this.pointerDownTimeMs = nowMs;
+    this.pointerHoldMs = 0;
     this.isSlingshotDragging = false;
     this.wasArmoredOnPointerDown = this.player.armored;
     if (this.tutorialActive && this.tutorialBriefVisible) {
@@ -635,7 +871,7 @@ export class GameEngine {
   }
 
   handlePointerMove(canvasX: number, canvasY: number, pointerId: number): void {
-    if (this.phase !== 'playing') return;
+    if (this.phase !== 'playing' || this.paused) return;
     if (this.activePointerId !== pointerId) return;
 
     this.pointerCurPos = { x: canvasX, y: canvasY };
@@ -646,8 +882,11 @@ export class GameEngine {
 
     if (!this.isSlingshotDragging && dist > CONTROLS.DRAG_THRESHOLD_PX) {
       this.isSlingshotDragging = true;
-      this.focusRemainingSec = this.getMaxFocusDuration();
-      this.slowMoActive = true;
+      if (!this.slowMoActive) {
+        this.focusRemainingSec = this.getMaxFocusDuration();
+        this.slowMoActive = true;
+        this.audio.playSlowMoEnter();
+      }
       if (
         this.tutorialActive &&
         this.tutorialStageIndex === 2 &&
@@ -655,7 +894,6 @@ export class GameEngine {
       ) {
         this.tutorialSlowMoDuringBullets = true;
       }
-      this.audio.playSlowMoEnter();
     }
   }
 
@@ -668,15 +906,15 @@ export class GameEngine {
     const pullY = this.pointerDownPos.y - this.pointerCurPos.y;
     const pullDist = len(pullX, pullY);
 
-    if (this.phase === 'playing') {
+    if (this.phase === 'playing' && !this.paused) {
       if (this.isSlingshotDragging) {
         if (pullDist >= CONTROLS.DRAG_THRESHOLD_PX) {
           const dir = normalize(pullX, pullY);
-          const ratio = clamp(
-            pullDist / CONTROLS.SLINGSHOT_MAX_PULL_PX,
-            0.22,
-            1.0,
+          const maxPull = Math.max(
+            CONTROLS.MIN_PULL_SENSITIVITY_PX,
+            this.settings.pullSensitivityPx,
           );
+          const ratio = clamp(pullDist / maxPull, 0.22, 1.0);
           const speed =
             PHYSICS.MIN_LAUNCH_SPEED +
             (this.getMaxLaunchSpeed() - PHYSICS.MIN_LAUNCH_SPEED) * ratio;
@@ -686,6 +924,9 @@ export class GameEngine {
           this.player.aimDirX = dir.x;
           this.player.aimDirY = dir.y;
           this.player.armored = speed >= PHYSICS.ARMORED_SPEED_THRESHOLD;
+          if (this.slowMoActive) {
+            this.postSlowMoLaunchTimer = 1.8;
+          }
           if (
             this.tutorialActive &&
             this.tutorialStageIndex === 2 &&
@@ -723,6 +964,7 @@ export class GameEngine {
       this.audio.playSlowMoExit();
     }
     this.activePointerId = null;
+    this.pointerHoldMs = 0;
     this.isSlingshotDragging = false;
     this.wasArmoredOnPointerDown = false;
     this.slowMoActive = false;
@@ -765,11 +1007,21 @@ export class GameEngine {
     this.player.vy = 0;
     this.player.armored = false;
 
-    const bonusDamage =
+    const momentumBonus =
       this.player.perks.momentum_edge > 0 && preBrakeSpeed >= COMBAT.MOMENTUM_EDGE_MIN_SPEED
-        ? 1
+        ? Math.max(1, Math.round(this.getPerkPower('momentum_edge')))
         : 0;
-    if (bonusDamage > 0) {
+    const bankBonus =
+      this.player.perks.ricochet_crit > 0 && this.player.chargeTier >= 2
+        ? Math.max(1, Math.round(this.getPerkPower('ricochet_crit')))
+        : 0;
+    const snapBonus =
+      this.player.perks.perfect_brake > 0 && this.timeSinceWallBounce <= 0.22
+        ? Math.max(1, Math.round(this.getPerkPower('perfect_brake')))
+        : 0;
+    const bonusDamage = momentumBonus + bankBonus + snapBonus;
+
+    if (momentumBonus > 0) {
       this.addFloatingText(
         this.player.x,
         Math.max(ARENA.top + 12, this.player.y - 20),
@@ -777,11 +1029,20 @@ export class GameEngine {
         COLORS.textGold,
         0.9,
       );
+    } else if (snapBonus > 0) {
+      this.addFloatingText(
+        this.player.x,
+        Math.max(ARENA.top + 12, this.player.y - 20),
+        'APEX SNAP!',
+        COLORS.textCyan,
+        0.9,
+      );
     }
 
     // Optional perk: Bullet-Clear Shockwave on Charged Brake Tap
     if (this.player.perks.brake_shockwave > 0 && this.player.chargeTier >= 1) {
-      const shockRadius = COMBAT.BRAKE_SHOCKWAVE_RADIUS;
+      const shockPower = this.getPerkPower('brake_shockwave');
+      const shockRadius = COMBAT.BRAKE_SHOCKWAVE_RADIUS * (1 + (shockPower - 1) * 0.4);
       this.rings.push({
         x: this.player.x,
         y: this.player.y,
@@ -871,14 +1132,14 @@ export class GameEngine {
       this.transitionTimer += rawDt;
       if (this.transitionTimer >= TRANSITION.ROOM_SCROLL_SEC) {
         this.transitionTimer = 0;
-        const options = generateDraftOptions(this.player, this.roomNumber);
+        const options = generateDraftOptions(this.player, this.roomNumber, this.flowMultiplier);
         this.setPhase('draft');
         this.callbacks.onDraftReady?.(options, this.roomNumber);
       }
       return;
     }
 
-    if (this.phase !== 'playing') return;
+    if (this.phase !== 'playing' || this.paused) return;
 
     if (this.tutorialActive && this.tutorialBriefVisible) {
       this.updateEffects(rawDt);
@@ -886,8 +1147,25 @@ export class GameEngine {
       return;
     }
 
+    // Hold-to-Focus: pressing and holding >= 90ms also enters slow-mo immediately
+    if (this.activePointerId !== null && !this.isSlingshotDragging && !this.slowMoActive) {
+      this.pointerHoldMs += rawDt * 1000;
+      if (this.pointerHoldMs >= CONTROLS.HOLD_SLOWMO_DELAY_MS) {
+        this.focusRemainingSec = this.getMaxFocusDuration();
+        this.slowMoActive = true;
+        this.audio.playSlowMoEnter();
+        if (
+          this.tutorialActive &&
+          this.tutorialStageIndex === 2 &&
+          this.projectiles.some((pr) => !pr.fromPlayer)
+        ) {
+          this.tutorialSlowMoDuringBullets = true;
+        }
+      }
+    }
+
     // Focus Ring countdown happens in real-time
-    if (this.isSlingshotDragging && this.slowMoActive) {
+    if (this.slowMoActive) {
       if (
         this.tutorialActive &&
         this.tutorialStageIndex === 2 &&
@@ -908,7 +1186,15 @@ export class GameEngine {
       return;
     }
 
-    const timeScale = this.slowMoActive ? CONTROLS.AIM_TIME_SCALE : 1.0;
+    let timeScale = 1.0;
+    if (this.slowMoActive) {
+      if (this.focusRemainingSec < CONTROLS.FOCUS_RAMPOUT_SEC) {
+        const rampT = 1 - clamp(this.focusRemainingSec / CONTROLS.FOCUS_RAMPOUT_SEC, 0, 1);
+        timeScale = CONTROLS.AIM_TIME_SCALE + (1.0 - CONTROLS.AIM_TIME_SCALE) * (rampT * rampT);
+      } else {
+        timeScale = CONTROLS.AIM_TIME_SCALE;
+      }
+    }
     const simDt = rawDt * timeScale;
     this.accumulator += simDt;
 
@@ -931,6 +1217,10 @@ export class GameEngine {
   stepSimulation(dt: number): void {
     this.tutorialResetDuringStep = false;
     this.roomTimer += dt;
+    this.timeSinceWallBounce += dt;
+    if (this.postSlowMoLaunchTimer > 0) {
+      this.postSlowMoLaunchTimer = Math.max(0, this.postSlowMoLaunchTimer - dt);
+    }
     this.checkOverheatWarning();
 
     if (this.multiKillTimer > 0) {
@@ -1050,7 +1340,7 @@ export class GameEngine {
     if (p.iframes > 0) p.iframes = Math.max(0, p.iframes - dt);
     if (p.flashTimer > 0) p.flashTimer = Math.max(0, p.flashTimer - dt);
 
-    const effectiveDrag = PHYSICS.PLAYER_DRAG * Math.pow(0.88, p.perks.air_drag_tune);
+    const effectiveDrag = PHYSICS.PLAYER_DRAG * Math.pow(0.88, this.getPerkPower('air_drag_tune'));
     const drag = Math.exp(-effectiveDrag * dt);
     p.vx *= drag;
     p.vy *= drag;
@@ -1094,6 +1384,7 @@ export class GameEngine {
 
     const wallRes = stepCircleArena(p, dt, this.getWallRestitution());
     if (wallRes.hitWall) {
+      this.timeSinceWallBounce = 0;
       const postSpeed = len(p.vx, p.vy);
       if (postSpeed >= PHYSICS.STOP_SPEED_THRESHOLD) {
         p.aimDirX = p.vx / postSpeed;
@@ -1213,37 +1504,52 @@ export class GameEngine {
           }
         }
 
-        let hit = false;
+        let consumed = false;
         for (const e of this.enemies) {
           if (e.hp <= 0) continue;
+          if (pr.hitEnemyIds?.includes(e.id)) continue;
           if (len(e.x - pr.x, e.y - pr.y) <= e.radius + pr.radius) {
             const dir = normalize(pr.vx, pr.vy);
             const kb = pr.knockback ?? 160;
+            const elapsed = (pr.maxLife ?? pr.life) - pr.life;
+            const pbBonus =
+              pr.pointBlankBonus && pr.pointBlankWindowSec && elapsed <= pr.pointBlankWindowSec
+                ? pr.pointBlankBonus
+                : 0;
+            if (pr.slamTimerSec) {
+              e.slammedTimer = Math.max(e.slammedTimer, pr.slamTimerSec);
+            }
             this.damageEnemy(
               e,
-              pr.damage,
+              pr.damage + pbBonus,
               dir.x * kb,
               dir.y * kb,
               pr.x - dir.x * 8,
               pr.y - dir.y * 8,
               Boolean(pr.fromCharge) || (pr.bouncesDone ?? 0) > 0,
             );
-            hit = true;
-            break;
+            if ((pr.piercesLeft ?? 0) > 0) {
+              pr.piercesLeft = (pr.piercesLeft ?? 1) - 1;
+              if (!pr.hitEnemyIds) pr.hitEnemyIds = [];
+              pr.hitEnemyIds.push(e.id);
+            } else {
+              consumed = true;
+              break;
+            }
           }
         }
-        if (!hit) {
+        if (!consumed) {
           for (const h of this.hazards) {
             if (h.triggered || h.kind !== 'barrel') continue;
             if (len(h.x - pr.x, h.y - pr.y) <= h.radius + pr.radius) {
               this.hitHazard(h, pr.x, pr.y);
               if (this.tutorialResetDuringStep) return;
-              hit = true;
+              consumed = true;
               break;
             }
           }
         }
-        if (hit) {
+        if (consumed) {
           this.projectiles.splice(i, 1);
         }
       } else {
@@ -1274,6 +1580,7 @@ export class GameEngine {
 
   private updateEnemies(dt: number): void {
     const p = this.player;
+    const cdMul = this.getEnemyCooldownMul();
 
     for (const e of this.enemies) {
       if (e.hp <= 0) continue;
@@ -1304,7 +1611,7 @@ export class GameEngine {
                 30,
                 75,
               );
-              e.fireTimer = 2.4 + Math.random() * 0.8;
+              e.fireTimer = (2.4 + Math.random() * 0.8) * cdMul;
             }
           }
           const desiredVx = e.stationary ? 0 : toPlayer.x * moveSpeed;
@@ -1317,7 +1624,7 @@ export class GameEngine {
           e.stateTimer -= dt;
           if (e.spikeState === 'calm' && e.stateTimer <= 0) {
             e.spikeState = 'telegraph';
-            e.stateTimer = 0.75;
+            e.stateTimer = 0.75 * Math.max(0.75, cdMul);
           } else if (e.spikeState === 'telegraph' && e.stateTimer <= 0) {
             e.spikeState = 'spiked';
             e.stateTimer = 1.25;
@@ -1329,7 +1636,7 @@ export class GameEngine {
             e.spikePhaseParity = (parity + 1) % 2;
           } else if (e.spikeState === 'spiked' && e.stateTimer <= 0) {
             e.spikeState = 'calm';
-            e.stateTimer = 1.85;
+            e.stateTimer = 1.85 * cdMul;
           }
           const chaseSpeed = e.spikeState === 'spiked' ? 18 : 30;
           e.vx += (toPlayer.x * chaseSpeed - e.vx) * Math.min(1, dt * PHYSICS.ENEMY_KNOCKBACK_DRAG);
@@ -1358,7 +1665,7 @@ export class GameEngine {
             e.angle = this.rotateToward(e.angle, targetAngle, dt * 2.4);
             if (e.stateTimer <= 0) {
               e.sniperState = 'tracking';
-              e.stateTimer = 0.92;
+              e.stateTimer = 0.92 * Math.max(0.75, cdMul);
             }
           } else if (e.sniperState === 'tracking') {
             e.angle = this.rotateToward(e.angle, targetAngle, dt * 2.0);
@@ -1382,7 +1689,7 @@ export class GameEngine {
               }
               this.spawnSparks(e.x + bx * 10, e.y + by * 10, bx, by, COLORS.bulletRed, 5, 40, 100);
               e.sniperState = 'cooldown';
-              e.stateTimer = 1.05;
+              e.stateTimer = 1.05 * cdMul;
             }
           }
           break;
@@ -1445,7 +1752,7 @@ export class GameEngine {
                 for (let k = 0; k < 5; k++) {
                   this.spawnEnemyBullet(e.x, e.y, e.angle + (k * Math.PI * 2) / 5, 118, e.radius + 2, 3.2);
                 }
-                e.fireTimer = 1.9 + Math.random() * 0.5;
+                e.fireTimer = (1.9 + Math.random() * 0.5) * cdMul;
               }
               this.rings.push({
                 x: e.x,
@@ -1461,16 +1768,24 @@ export class GameEngine {
           break;
         }
         case 'boss': {
+          const bossTier = e.bossTier ?? Math.max(1, Math.floor(this.roomNumber / 5));
           const isPhase2 = e.hp <= e.maxHp * 0.5;
           const targetAngle = Math.atan2(p.y - e.y, p.x - e.x);
-          e.angle = this.rotateToward(e.angle, targetAngle, dt * (isPhase2 ? 1.05 : 0.92));
+          const baseTurn =
+            bossTier === 1
+              ? isPhase2
+                ? 0.92
+                : 0.78
+              : (isPhase2 ? 1.02 : 0.9) + Math.min(0.45, (bossTier - 2) * 0.09);
+          e.angle = this.rotateToward(e.angle, targetAngle, dt * baseTurn);
 
-          // Drift gently in upper/mid arena
-          const anchorX = 135 + Math.sin(this.roomTimer * 0.7) * 52;
+          // Drift gently in upper/mid arena (faster horizontal sweep on Tier 2+)
+          const driftSpeed = bossTier >= 2 ? 0.8 + Math.min(0.4, (bossTier - 2) * 0.08) : 0.7;
+          const anchorX = 135 + Math.sin(this.roomTimer * driftSpeed) * (bossTier >= 2 ? 60 : 52);
           const anchorY = 145 + Math.cos(this.roomTimer * 0.5) * 28;
           const toAnchor = normalizeOr(anchorX - e.x, anchorY - e.y, 0, 0);
           const anchorDist = len(anchorX - e.x, anchorY - e.y);
-          const moveSpeed = anchorDist > 6 ? 26 : 0;
+          const moveSpeed = anchorDist > 6 ? 26 + Math.min(18, (bossTier - 1) * 3) : 0;
           e.vx += (toAnchor.x * moveSpeed - e.vx) * Math.min(1, dt * 3.5);
           e.vy += (toAnchor.y * moveSpeed - e.vy) * Math.min(1, dt * 3.5);
 
@@ -1483,41 +1798,63 @@ export class GameEngine {
               } else if (pat === 2) {
                 const aim = e.telegraphAngle ?? Math.atan2(p.y - e.y, p.x - e.x);
                 this.spawnEnemyBullet(e.x, e.y, aim, 185, e.radius + 2, 3.5);
+              } else if (pat === 3) {
+                this.fireBossRadialBurst(e, 0.18 * ((e.burstRemaining ?? 1) + 1));
               }
               e.burstRemaining = (e.burstRemaining ?? 1) - 1;
-              e.burstCooldown = pat === 2 ? 0.16 : 0.34;
+              e.burstCooldown = pat === 2 ? 0.15 : pat === 3 ? 0.24 : 0.34;
             }
           }
 
           e.stateTimer -= dt;
           if (e.bossPhase === 0 && e.stateTimer <= 0) {
-            const patternCount = isPhase2 ? 3 : 2;
+            const patternCount = bossTier >= 2 ? (isPhase2 ? 4 : 3) : isPhase2 ? 3 : 2;
             const nextPat = ((e.bossPattern ?? 0) + 1) % patternCount;
             e.bossPattern = nextPat;
             e.telegraphAngle = Math.atan2(p.y - e.y, p.x - e.x);
             e.bossPhase = 1; // Telegraph active pattern
-            e.stateTimer = isPhase2 ? 0.5 : 0.6;
+            e.stateTimer =
+              bossTier === 1
+                ? isPhase2
+                  ? 0.58
+                  : 0.7
+                : Math.max(0.34, (isPhase2 ? 0.48 : 0.58) - (bossTier - 2) * 0.03);
           } else if (e.bossPhase === 1 && e.stateTimer <= 0) {
             const pat = e.bossPattern ?? 0;
             if (pat === 0) {
               this.fireBossRadialBurst(e, 0);
-              e.burstRemaining = 1;
-              e.burstCooldown = 0.34;
+              e.burstRemaining = bossTier >= 4 ? 2 : 1;
+              e.burstCooldown = 0.32;
             } else if (pat === 1) {
               const baseAim = e.telegraphAngle ?? Math.atan2(p.y - e.y, p.x - e.x);
+              const fanHalfCount = bossTier >= 4 ? 3 : 2;
               const fanSpan = (26 * Math.PI) / 180;
-              for (let k = 0; k < 5; k++) {
-                const off = ((k / 4) * 2 - 1) * fanSpan;
+              const total = fanHalfCount * 2 + 1;
+              for (let k = 0; k < total; k++) {
+                const off = ((k / (total - 1)) * 2 - 1) * fanSpan;
                 this.spawnEnemyBullet(e.x, e.y, baseAim + off, 162, e.radius + 2, 3.5);
               }
               this.audio.playWeapon('shotgun', 0);
-            } else {
+            } else if (pat === 2) {
               this.fireBossRadialBurst(e, 0);
-              e.burstRemaining = 2;
-              e.burstCooldown = 0.16;
+              e.burstRemaining = bossTier >= 2 ? 3 : 2;
+              e.burstCooldown = 0.15;
+            } else {
+              // Tier 2+ Spiral barrage + aimed center shot
+              const baseAim = e.telegraphAngle ?? Math.atan2(p.y - e.y, p.x - e.x);
+              this.spawnEnemyBullet(e.x, e.y, baseAim, 195, e.radius + 2, 3.5);
+              this.fireBossRadialBurst(e, 0.15);
+              e.burstRemaining = bossTier >= 4 ? 3 : 2;
+              e.burstCooldown = 0.24;
             }
             e.bossPhase = 0;
-            e.stateTimer = isPhase2 ? 1.65 : 2.15;
+            const rawIdle =
+              bossTier === 1
+                ? isPhase2
+                  ? 1.85
+                  : 2.35
+                : Math.max(1.0, (isPhase2 ? 1.55 : 2.0) - (bossTier - 2) * 0.11);
+            e.stateTimer = rawIdle * DIFFICULTY_CONFIG[this.settings.difficulty].enemyCooldownMul;
           }
           break;
         }
@@ -1532,14 +1869,15 @@ export class GameEngine {
         this.addShake(-wallHit.normalX, -wallHit.normalY, 4);
         this.addFloatingText(e.x, e.y - 12, 'WALL SLAM!', COLORS.textGold, 0.95);
         this.spawnSparks(e.x, e.y, wallHit.normalX, wallHit.normalY, COLORS.textGold, 10, 50, 140);
-        const slamDmg = COMBAT.WALL_SLAM_BONUS_DAMAGE + p.perks.heavy_ram;
+        const kineticBonus = Math.floor((p.perks.kinetic_mastery ?? 0) * 0.5);
+        const slamDmg = COMBAT.WALL_SLAM_BONUS_DAMAGE + Math.round(this.getPerkPower('heavy_ram')) + kineticBonus;
         this.damageEnemy(e, slamDmg, 0, 0, e.x, e.y, true, true);
         if (this.tutorialActive && this.tutorialStageIndex === 0 && e.hp <= 0) {
           this.tutorialRamKillCount++;
         }
 
         if (p.perks.explosive_slam > 0) {
-          this.triggerExplosiveSlam(e.x, e.y, p.perks.explosive_slam);
+          this.triggerExplosiveSlam(e.x, e.y, this.getPerkPower('explosive_slam'));
         }
       }
 
@@ -1589,8 +1927,9 @@ export class GameEngine {
             resolveCircleCollision(p, e, 0.95);
             this.clampToArena(p);
             this.clampToArena(e);
-            const ramDmg = COMBAT.RAM_BASE_DAMAGE + (p.chargeTier >= 2 ? 1 : 0);
-            const knockSpeed = 290 + p.chargeTier * 35 + p.perks.heavy_ram * 45;
+            const kineticBonus = Math.floor((p.perks.kinetic_mastery ?? 0) * 0.5);
+            const ramDmg = COMBAT.RAM_BASE_DAMAGE + (p.chargeTier >= 2 ? 1 : 0) + kineticBonus;
+            const knockSpeed = 290 + p.chargeTier * 35 + this.getPerkPower('heavy_ram') * 45;
             e.slammedTimer = 0.8;
             this.audio.playRam(p.chargeTier >= 2);
             this.triggerHitstop(COMBAT.HITSTOP_LIGHT_SEC);
@@ -1653,6 +1992,7 @@ export class GameEngine {
     spawnOffset: number,
     radius = 3.5,
   ): void {
+    const finalSpeed = speed * this.getEnemyBulletSpeedMul();
     const bx = Math.cos(angle);
     const by = Math.sin(angle);
     this.projectiles.push({
@@ -1660,8 +2000,8 @@ export class GameEngine {
       fromPlayer: false,
       x: x + bx * spawnOffset,
       y: y + by * spawnOffset,
-      vx: bx * speed,
-      vy: by * speed,
+      vx: bx * finalSpeed,
+      vy: by * finalSpeed,
       radius,
       damage: 1,
       life: 3.6,
@@ -1672,12 +2012,14 @@ export class GameEngine {
   private fireBossRadialBurst(boss: Enemy, extraAngleOffset = 0): void {
     const burstIndex = (boss.bossBurstCount ?? 0) + 1;
     boss.bossBurstCount = burstIndex;
-    const count = 9 + Math.floor(this.roomNumber / 5);
+    const bossTier = boss.bossTier ?? Math.max(1, Math.floor(this.roomNumber / 5));
+    const count = 9 + bossTier;
+    const baseSpeed = 132 + Math.min(48, Math.max(0, bossTier - 1) * 10);
     const offset = extraAngleOffset + (burstIndex % 2) * (Math.PI / count);
 
     for (let i = 0; i < count; i++) {
       const a = offset + (i * Math.PI * 2) / count;
-      this.spawnEnemyBullet(boss.x, boss.y, a, 132, boss.radius + 2, 3.5);
+      this.spawnEnemyBullet(boss.x, boss.y, a, baseSpeed, boss.radius + 2, 3.5);
     }
     this.rings.push({
       x: boss.x,
@@ -1905,15 +2247,18 @@ export class GameEngine {
     this.audio.playKill(this.multiKillCount);
 
     if (isBankOrCharged || this.multiKillCount >= 2) {
+      const refundBonus =
+        this.player.perks.focus_kill_refund > 0 && this.postSlowMoLaunchTimer > 0 ? 0.5 : 0;
+      if (refundBonus > 0) this.postSlowMoLaunchTimer = 0;
       this.flowMultiplier = Math.min(
         this.getMaxFlowMultiplier(),
-        +(this.flowMultiplier + 0.5).toFixed(1),
+        +(this.flowMultiplier + 0.5 + refundBonus).toFixed(1),
       );
       this.updateMusicIntensity();
     }
 
     const basePoints = enemy.kind === 'boss' ? 500 : 100;
-    const gained = Math.round(basePoints * this.flowMultiplier);
+    const gained = Math.round(basePoints * this.flowMultiplier * this.getScoreMultiplier());
     this.score += gained;
 
     if (this.multiKillCount >= 3 || enemy.kind === 'boss') {
@@ -2053,7 +2398,7 @@ export class GameEngine {
             !this.tutorialSlowMoDuringBullets ||
             !this.tutorialMovedDuringWave)
         ) {
-          this.resetCurrentTutorialDrill('DODGE WITH 0.2X SLOW-MO!');
+          this.resetCurrentTutorialDrill('DODGE WITH 0.12X SLOW-MO!');
           return;
         }
         this.advanceTutorialStage();
@@ -2067,7 +2412,7 @@ export class GameEngine {
           +(this.flowMultiplier + noHitGain).toFixed(1),
         );
       }
-      const clearBonus = Math.round(this.roomNumber * 100 * this.flowMultiplier);
+      const clearBonus = Math.round(this.roomNumber * 100 * this.flowMultiplier * this.getScoreMultiplier());
       this.score += clearBonus;
       if (this.score > this.bestScore) this.bestScore = this.score;
       if (this.roomNumber > this.bestRoom) this.bestRoom = this.roomNumber;
@@ -2095,6 +2440,7 @@ export class GameEngine {
   }
 
   private addShake(dx: number, dy: number, intensity: number): void {
+    if (!this.settings.screenShake) return;
     const n = normalizeOr(dx, dy, 0, 1);
     this.shakeDirX = n.x;
     this.shakeDirY = n.y;
@@ -2153,7 +2499,7 @@ export class GameEngine {
   // ---- Rendering Snapshot ----
 
   private buildAimRenderState(): AimRenderState {
-    if (!this.isSlingshotDragging || this.phase !== 'playing') {
+    if ((!this.isSlingshotDragging && !this.slowMoActive) || this.phase !== 'playing') {
       return {
         active: false,
         pullX: 0,
@@ -2169,7 +2515,11 @@ export class GameEngine {
     const rawPullY = this.pointerDownPos.y - this.pointerCurPos.y;
     const pullDist = len(rawPullX, rawPullY);
     const dir = normalize(rawPullX, rawPullY);
-    const pullRatio = clamp(pullDist / CONTROLS.SLINGSHOT_MAX_PULL_PX, 0.22, 1.0);
+    const maxPull = Math.max(
+      CONTROLS.MIN_PULL_SENSITIVITY_PX,
+      this.settings.pullSensitivityPx,
+    );
+    const pullRatio = clamp(pullDist / maxPull, 0.22, 1.0);
     const maxBounces = CONTROLS.BASE_PREVIEW_BOUNCES + this.player.perks.preview_bounce;
 
     const previewPoints =
@@ -2186,9 +2536,9 @@ export class GameEngine {
 
     const maxFocus = this.getMaxFocusDuration();
     return {
-      active: pullDist >= CONTROLS.DRAG_THRESHOLD_PX,
-      pullX: -dir.x * Math.min(pullDist, CONTROLS.SLINGSHOT_MAX_PULL_PX) * 0.45,
-      pullY: -dir.y * Math.min(pullDist, CONTROLS.SLINGSHOT_MAX_PULL_PX) * 0.45,
+      active: pullDist >= CONTROLS.DRAG_THRESHOLD_PX || this.slowMoActive,
+      pullX: -dir.x * Math.min(pullDist, maxPull) * 0.45,
+      pullY: -dir.y * Math.min(pullDist, maxPull) * 0.45,
       pullRatio,
       focusRemainingRatio: clamp(this.focusRemainingSec / maxFocus, 0, 1),
       slowMoActive: this.slowMoActive,

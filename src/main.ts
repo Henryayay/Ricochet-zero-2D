@@ -1,7 +1,15 @@
 import './style.css';
 import { registerSW } from 'virtual:pwa-register';
-import { CANVAS_HEIGHT, CANVAS_WIDTH, COMBAT } from './game/constants.ts';
-import { DraftOption, WeaponId } from './game/entities.ts';
+import {
+  CANVAS_HEIGHT,
+  CANVAS_WIDTH,
+  COMBAT,
+  CONTROLS,
+  DIFFICULTY_CONFIG,
+  DIFFICULTY_ORDER,
+  RARITY_META,
+} from './game/constants.ts';
+import { DifficultyId, DraftOption, WeaponId } from './game/entities.ts';
 import { GameEngine, GamePhase, RunSummary } from './game/engine.ts';
 import { TutorialRenderInfo } from './game/tutorial.ts';
 import { WEAPON_META } from './game/weapons.ts';
@@ -23,6 +31,7 @@ let latestDraftRoom = 1;
 let latestTransferRemaining = 0;
 let latestTransferWeapon: WeaponId | null = null;
 let latestTutorial: TutorialRenderInfo | null = null;
+let settingsModalOpen = false;
 let latestSummary: RunSummary = {
   score: 0,
   bestScore: 0,
@@ -44,17 +53,32 @@ const engine = new GameEngine({
   },
   onGameOver(summary) {
     latestSummary = summary;
+    settingsModalOpen = false;
     renderUI('gameover');
   },
   onMuteChange(muted) {
     const muteBtn = document.getElementById('btn-mute');
     if (muteBtn) {
-      muteBtn.textContent = muted ? 'SND: OFF' : 'SND: ON';
+      muteBtn.innerHTML = getMuteIconSvg(muted);
+      muteBtn.classList.toggle('muted', muted);
+      muteBtn.setAttribute('aria-label', muted ? 'Unmute sound' : 'Mute sound');
+      muteBtn.title = muted ? 'Sound: Off' : 'Sound: On';
     }
   },
   onTutorialStateChange(info) {
     latestTutorial = info;
     updateTutorialOverlayDOM();
+  },
+  onSettingsChange() {
+    if (settingsModalOpen || engine.phase === 'title') {
+      renderUI(engine.phase);
+    }
+  },
+  onPauseChange(paused) {
+    if (!paused && settingsModalOpen && engine.phase === 'playing') {
+      settingsModalOpen = false;
+    }
+    renderUI(engine.phase);
   },
 });
 
@@ -115,22 +139,36 @@ document.addEventListener('visibilitychange', () => {
 
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
-function renderMuteBar(): string {
-  const label = engine.audio.isMuted() ? 'SND: OFF' : 'SND: ON';
+const SETTINGS_ICON_SVG = `<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="square" aria-hidden="true"><circle cx="8" cy="8" r="2.6"/><path d="M8 1.8v1.7M8 12.5v1.7M1.8 8h1.7M12.5 8h1.7M3.6 3.6l1.2 1.2M11.2 11.2l1.2 1.2M12.4 3.6l-1.2 1.2M4.8 11.2l-1.2 1.2"/></svg>`;
+
+function getMuteIconSvg(muted: boolean): string {
+  if (muted) {
+    return `<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="square" aria-hidden="true"><path d="M2.5 6h2.6l3.4-2.8v9.6L5.1 10H2.5z" fill="currentColor" stroke="none"/><path d="M11 6l3 4M14 6l-3 4"/></svg>`;
+  }
+  return `<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="square" aria-hidden="true"><path d="M2.5 6h2.6l3.4-2.8v9.6L5.1 10H2.5z" fill="currentColor" stroke="none"/><path d="M10.8 5.6a3.5 3.5 0 0 1 0 4.8M12.7 3.8a6 6 0 0 1 0 8.4"/></svg>`;
+}
+
+function renderMuteBar(phase: GamePhase): string {
+  const muted = engine.audio.isMuted();
   const skipBtn =
-    engine.isTutorialActive() && engine.phase === 'playing'
+    engine.isTutorialActive() && phase === 'playing'
       ? `<button id="btn-skip-tutorial" class="pixel-btn-mini skip ui-interactive" type="button">SKIP</button>`
       : '';
+  const setLabel = phase === 'playing' ? 'Pause & Settings' : 'Settings';
   return `
     <div class="hud-top-actions">
       ${skipBtn}
-      <button id="btn-mute" class="pixel-btn-mini ui-interactive" type="button">${label}</button>
+      <button id="btn-mute" class="pixel-icon-btn ${muted ? 'muted' : ''} ui-interactive" type="button" aria-label="${muted ? 'Unmute sound' : 'Mute sound'}" title="${muted ? 'Sound: Off' : 'Sound: On'}">${getMuteIconSvg(muted)}</button>
+      <button id="btn-open-settings" class="pixel-icon-btn ui-interactive" type="button" aria-label="${setLabel}" title="${setLabel}">${SETTINGS_ICON_SVG}</button>
     </div>
   `;
 }
 
 function renderTitleOverlay(): string {
   const selected = engine.getStartingWeapon();
+  const settings = engine.getSettings();
+  const diffMeta = DIFFICULTY_CONFIG[settings.difficulty];
+  const rec = engine.getDifficultyRecord(settings.difficulty);
   const chips = STARTER_WEAPONS.map((wid) => {
     const meta = WEAPON_META[wid];
     const active = wid === selected ? 'active' : '';
@@ -138,9 +176,9 @@ function renderTitleOverlay(): string {
   }).join('');
 
   const bestRow =
-    engine.bestScore > 0
-      ? `<div style="text-align:center;font-size:10px;color:#ffd447;margin-top:8px;letter-spacing:0.08em;">BEST: ${engine.bestScore} // ROOM ${engine.bestRoom}</div>`
-      : '';
+    rec.bestScore > 0
+      ? `<div style="text-align:center;font-size:10px;color:#ffd447;margin-top:8px;letter-spacing:0.08em;">${diffMeta.label} BEST: ${rec.bestScore} // ROOM ${rec.bestRoom}</div>`
+      : `<div style="text-align:center;font-size:10px;color:#8a95b8;margin-top:8px;letter-spacing:0.08em;">MODE: ${diffMeta.label}</div>`;
 
   return `
     <div class="overlay-backdrop">
@@ -150,7 +188,7 @@ function renderTitleOverlay(): string {
         ${bestRow}
 
         <div class="guide-list">
-          <div><span class="guide-tag tag-cyan">DRAG</span> <strong>Slingshot Aim:</strong> Slow-mo 0.2x Focus Ring + banked raycast preview.</div>
+          <div><span class="guide-tag tag-cyan">DRAG</span> <strong>Slingshot Aim:</strong> Hold or drag for 0.12x slow-mo Focus Ring + banked preview.</div>
           <div><span class="guide-tag tag-gold">TAP</span> <strong>Brake &amp; Fire:</strong> Quick tap mid-flight stops &amp; fires along your nose chevron.</div>
           <div><span class="guide-tag tag-red">RED</span> <strong>Red Means Dead:</strong> Red spikes, bombs &amp; lasers pierce armor!</div>
         </div>
@@ -161,7 +199,10 @@ function renderTitleOverlay(): string {
 
       <div class="title-actions">
         <button id="btn-start" class="pixel-cta" type="button">DROP IN</button>
-        <button id="btn-tutorial" class="pixel-cta secondary" type="button">TUTORIAL</button>
+        <div class="title-sub-actions">
+          <button id="btn-tutorial" class="pixel-cta secondary" type="button">TUTORIAL</button>
+          <button id="btn-title-settings" class="pixel-cta secondary" type="button">SETTINGS</button>
+        </div>
       </div>
     </div>
   `;
@@ -170,17 +211,28 @@ function renderTitleOverlay(): string {
 function renderDraftOverlay(): string {
   const cards = latestDraft
     .map((opt, idx) => {
+      const rarity = opt.rarity ?? 'common';
+      const rarityInfo = RARITY_META[rarity];
       const badge =
         opt.kind === 'weapon'
           ? 'WEAPON'
-          : opt.kind === 'weapon_mod'
-            ? opt.rankLabel ?? 'MOD'
-            : opt.rankLabel ?? 'PERK';
+          : opt.rankLabel
+            ? opt.rankLabel
+            : opt.kind === 'weapon_mod'
+              ? 'MOD'
+              : 'PERK';
+      const rarityTag =
+        opt.kind === 'weapon'
+          ? ''
+          : `<span class="rarity-pill rarity-${rarity}">${rarityInfo.label}</span>`;
       return `
-        <button class="draft-card ${opt.kind}" data-draft-idx="${idx}" type="button">
+        <button class="draft-card ${opt.kind} rarity-${rarity}" data-draft-idx="${idx}" type="button">
           <div class="draft-card-top">
             <span class="draft-title">${opt.title}</span>
-            <span class="draft-badge ${opt.kind}">${badge}</span>
+            <div class="draft-badges">
+              ${rarityTag}
+              <span class="draft-badge ${opt.kind}">${badge}</span>
+            </div>
           </div>
           <div class="draft-desc">${opt.description}</div>
         </button>
@@ -213,9 +265,10 @@ function renderDraftOverlay(): string {
 }
 
 function renderGameOverOverlay(): string {
+  const diffLabel = DIFFICULTY_CONFIG[engine.getSettings().difficulty].label;
   const badge = latestSummary.isNewBest
-    ? `<div style="text-align:center;color:#ffd447;font-size:11px;font-weight:900;letter-spacing:0.12em;margin-top:4px;">NEW HIGH SCORE!</div>`
-    : '';
+    ? `<div style="text-align:center;color:#ffd447;font-size:11px;font-weight:900;letter-spacing:0.12em;margin-top:4px;">NEW ${diffLabel} HIGH SCORE!</div>`
+    : `<div style="text-align:center;color:#8a95b8;font-size:10px;font-weight:800;letter-spacing:0.1em;margin-top:4px;">MODE: ${diffLabel}</div>`;
   return `
     <div class="overlay-backdrop">
       <div class="panel-card">
@@ -239,7 +292,90 @@ function renderGameOverOverlay(): string {
             <div class="stat-value">${latestSummary.bestRoom}</div>
           </div>
         </div>
-        <button id="btn-restart" class="pixel-cta danger" type="button">RUN IT BACK</button>
+        <div class="title-actions">
+          <button id="btn-restart" class="pixel-cta danger" type="button">RUN IT BACK</button>
+          <button id="btn-gameover-settings" class="pixel-cta secondary" type="button">SETTINGS / DIFFICULTY</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderSettingsModal(phase: GamePhase): string {
+  if (!settingsModalOpen) return '';
+  const s = engine.getSettings();
+  const inActiveRun = phase === 'playing' || phase === 'draft' || phase === 'transition';
+  const sensSliderVal =
+    CONTROLS.MIN_PULL_SENSITIVITY_PX + CONTROLS.MAX_PULL_SENSITIVITY_PX - s.pullSensitivityPx;
+  const sensDesc =
+    s.pullSensitivityPx <= 54
+      ? `HIGH (${s.pullSensitivityPx}px)`
+      : s.pullSensitivityPx >= 82
+        ? `PRECISE (${s.pullSensitivityPx}px)`
+        : `DEFAULT (${s.pullSensitivityPx}px)`;
+
+  const diffChips = DIFFICULTY_ORDER.map((diffId) => {
+    const meta = DIFFICULTY_CONFIG[diffId];
+    const active = s.difficulty === diffId ? 'active' : '';
+    const disabled = inActiveRun ? 'disabled' : '';
+    return `<button class="difficulty-chip ${active}" data-difficulty="${diffId}" type="button" ${disabled}>${meta.label}</button>`;
+  }).join('');
+
+  const diffDesc = DIFFICULTY_CONFIG[s.difficulty].desc;
+  const quitBtn = inActiveRun
+    ? `<button id="btn-quit-run" class="pixel-cta secondary" type="button">QUIT TO TITLE</button>`
+    : '';
+
+  return `
+    <div class="overlay-backdrop settings-backdrop">
+      <div class="panel-card settings-modal">
+        <div class="settings-header">
+          <h2>${inActiveRun && phase === 'playing' ? 'PAUSED // SETTINGS' : 'SETTINGS'}</h2>
+          <span class="settings-sub">${inActiveRun ? 'SIMULATION PAUSED' : 'AUDIO, AIM & MODE'}</span>
+        </div>
+
+        <div class="settings-row">
+          <div class="settings-label-row">
+            <span>BGM VOLUME</span>
+            <span id="val-bgm">${Math.round(s.bgmVolume * 100)}%</span>
+          </div>
+          <input id="setting-bgm" class="settings-slider" type="range" min="0" max="100" value="${Math.round(s.bgmVolume * 100)}" />
+        </div>
+
+        <div class="settings-row">
+          <div class="settings-label-row">
+            <span>SFX VOLUME</span>
+            <span id="val-sfx">${Math.round(s.sfxVolume * 100)}%</span>
+          </div>
+          <input id="setting-sfx" class="settings-slider" type="range" min="0" max="100" value="${Math.round(s.sfxVolume * 100)}" />
+        </div>
+
+        <div class="settings-row">
+          <div class="settings-label-row">
+            <span>AIM SENSITIVITY</span>
+            <span id="val-sens">${sensDesc}</span>
+          </div>
+          <input id="setting-sens" class="settings-slider" type="range" min="${CONTROLS.MIN_PULL_SENSITIVITY_PX}" max="${CONTROLS.MAX_PULL_SENSITIVITY_PX}" value="${sensSliderVal}" />
+        </div>
+
+        <div class="settings-row settings-toggle-row">
+          <span>SCREEN SHAKE</span>
+          <button id="btn-toggle-shake" class="pixel-btn-mini ui-interactive" type="button">${s.screenShake ? 'ON' : 'OFF'}</button>
+        </div>
+
+        <div class="settings-row">
+          <div class="settings-label-row">
+            <span>DIFFICULTY</span>
+            <span class="settings-lock">${inActiveRun ? 'LOCKED IN RUN' : 'PER-MODE PB'}</span>
+          </div>
+          <div class="difficulty-row">${diffChips}</div>
+          <div class="settings-diff-desc">${diffDesc}</div>
+        </div>
+
+        <div class="title-actions" style="margin-top:10px;">
+          <button id="btn-close-settings" class="pixel-cta" type="button">${inActiveRun && phase === 'playing' ? 'RESUME' : 'DONE'}</button>
+          ${quitBtn}
+        </div>
       </div>
     </div>
   `;
@@ -285,6 +421,69 @@ function updateTutorialOverlayDOM(): void {
   }
 }
 
+function wireSettingsModalListeners(): void {
+  if (!settingsModalOpen) return;
+
+  const bgmInput = document.getElementById('setting-bgm') as HTMLInputElement | null;
+  bgmInput?.addEventListener('input', () => {
+    const val = Number(bgmInput.value) / 100;
+    const label = document.getElementById('val-bgm');
+    if (label) label.textContent = `${bgmInput.value}%`;
+    engine.updateSettings({ bgmVolume: val });
+  });
+
+  const sfxInput = document.getElementById('setting-sfx') as HTMLInputElement | null;
+  sfxInput?.addEventListener('input', () => {
+    const val = Number(sfxInput.value) / 100;
+    const label = document.getElementById('val-sfx');
+    if (label) label.textContent = `${sfxInput.value}%`;
+    engine.updateSettings({ sfxVolume: val });
+  });
+
+  const sensInput = document.getElementById('setting-sens') as HTMLInputElement | null;
+  sensInput?.addEventListener('input', () => {
+    const sliderVal = Number(sensInput.value);
+    const pullPx =
+      CONTROLS.MIN_PULL_SENSITIVITY_PX + CONTROLS.MAX_PULL_SENSITIVITY_PX - sliderVal;
+    const label = document.getElementById('val-sens');
+    if (label) {
+      label.textContent =
+        pullPx <= 54
+          ? `HIGH (${pullPx}px)`
+          : pullPx >= 82
+            ? `PRECISE (${pullPx}px)`
+            : `DEFAULT (${pullPx}px)`;
+    }
+    engine.updateSettings({ pullSensitivityPx: pullPx });
+  });
+
+  document.getElementById('btn-toggle-shake')?.addEventListener('click', () => {
+    engine.updateSettings({ screenShake: !engine.getSettings().screenShake });
+  });
+
+  document.querySelectorAll<HTMLButtonElement>('[data-difficulty]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (btn.disabled) return;
+      const diff = btn.dataset.difficulty as DifficultyId;
+      engine.updateSettings({ difficulty: diff });
+    });
+  });
+
+  document.getElementById('btn-close-settings')?.addEventListener('click', () => {
+    settingsModalOpen = false;
+    if (engine.phase === 'playing') {
+      engine.setPaused(false);
+    } else {
+      renderUI(engine.phase);
+    }
+  });
+
+  document.getElementById('btn-quit-run')?.addEventListener('click', () => {
+    settingsModalOpen = false;
+    engine.quitToTitle();
+  });
+}
+
 function renderUI(phase: GamePhase): void {
   let overlay = '';
   if (phase === 'title') {
@@ -295,13 +494,25 @@ function renderUI(phase: GamePhase): void {
     overlay = renderGameOverOverlay();
   }
 
-  uiLayer.innerHTML = `${renderMuteBar()}<div id="tutorial-overlay">${renderTutorialOverlayInner(phase)}</div>${overlay}`;
+  uiLayer.innerHTML = `${renderMuteBar(phase)}<div id="tutorial-overlay">${renderTutorialOverlayInner(phase)}</div>${overlay}${renderSettingsModal(phase)}`;
 
   const muteBtn = document.getElementById('btn-mute');
   muteBtn?.addEventListener('pointerdown', (e) => e.stopPropagation());
   muteBtn?.addEventListener('click', (e) => {
     e.stopPropagation();
     engine.toggleMute();
+  });
+
+  const openSettingsBtn = document.getElementById('btn-open-settings');
+  openSettingsBtn?.addEventListener('pointerdown', (e) => e.stopPropagation());
+  openSettingsBtn?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    settingsModalOpen = !settingsModalOpen;
+    if (phase === 'playing') {
+      engine.setPaused(settingsModalOpen);
+    } else {
+      renderUI(phase);
+    }
   });
 
   const skipTutBtn = document.getElementById('btn-skip-tutorial');
@@ -335,6 +546,10 @@ function renderUI(phase: GamePhase): void {
         postWeapon: engine.getStartingWeapon(),
       });
     });
+    document.getElementById('btn-title-settings')?.addEventListener('click', () => {
+      settingsModalOpen = true;
+      renderUI('title');
+    });
   } else if (phase === 'draft') {
     document.querySelectorAll<HTMLButtonElement>('[data-draft-idx]').forEach((btn) => {
       btn.addEventListener('click', () => {
@@ -350,7 +565,13 @@ function renderUI(phase: GamePhase): void {
     document.getElementById('btn-restart')?.addEventListener('click', () => {
       engine.startNewRun();
     });
+    document.getElementById('btn-gameover-settings')?.addEventListener('click', () => {
+      settingsModalOpen = true;
+      renderUI('gameover');
+    });
   }
+
+  wireSettingsModalListeners();
 }
 
 renderUI('title');

@@ -27,11 +27,15 @@ export const PHYSICS = {
 } as const;
 
 export const CONTROLS = {
-  DRAG_THRESHOLD_PX: 10,
+  DRAG_THRESHOLD_PX: 6,
+  HOLD_SLOWMO_DELAY_MS: 90,
   TAP_MAX_DURATION_MS: 140,
   SLINGSHOT_MAX_PULL_PX: 68,
-  AIM_TIME_SCALE: 0.2,
-  AIM_MAX_DURATION_SEC: 1.2,
+  MIN_PULL_SENSITIVITY_PX: 44,
+  MAX_PULL_SENSITIVITY_PX: 96,
+  AIM_TIME_SCALE: 0.12,
+  AIM_MAX_DURATION_SEC: 2.5,
+  FOCUS_RAMPOUT_SEC: 0.25,
   BASE_PREVIEW_BOUNCES: 1,
 } as const;
 
@@ -42,7 +46,7 @@ export const COMBAT = {
   HITSTOP_HEAVY_SEC: 0.045,
   HITSTOP_LIGHT_SEC: 0.022,
   MAX_CHARGE_TIER: 3,
-  MAX_WEAPON_UPGRADES: 2,
+  MAX_WEAPON_UPGRADES: 3,
   MAX_WEAPON_MOD_RANK: 1,
   HARD_MAX_HP: 4,
   HARD_MAX_SHIELD: 3,
@@ -74,6 +78,58 @@ export const PERK_MAX_RANKS = {
   flow_surge: 1,
   vital_core: 1,
   field_repair: 99,
+  ricochet_crit: 2,
+  perfect_brake: 2,
+  focus_kill_refund: 1,
+  kinetic_mastery: 99,
+  ordnance_caliber: 99,
+  velocity_tuning: 99,
+  overclock_score: 99,
+} as const;
+
+export const RARITY_ORDER = ['common', 'rare', 'epic', 'heroic', 'mythic'] as const;
+
+export const RARITY_META = {
+  common: { label: 'COMMON', color: '#9aa8cc', multiplier: 1.0 },
+  rare: { label: 'RARE', color: '#2cf5ff', multiplier: 1.35 },
+  epic: { label: 'EPIC', color: '#b967ff', multiplier: 1.75 },
+  heroic: { label: 'HEROIC', color: '#ffd447', multiplier: 2.2 },
+  mythic: { label: 'MYTHIC', color: '#ff2e88', multiplier: 2.75 },
+} as const;
+
+export const DIFFICULTY_ORDER = ['chill', 'standard', 'overdrive'] as const;
+
+export const DIFFICULTY_CONFIG = {
+  chill: {
+    label: 'CHILL',
+    desc: 'Relaxed pacing: +0.6s Focus, slower shots, lighter HP.',
+    enemyBulletSpeedMul: 0.72,
+    enemyCooldownMul: 1.35,
+    enemyHpMul: 0.75,
+    bossHpMul: 0.75,
+    focusBonusSec: 0.6,
+    scoreMul: 0.8,
+  },
+  standard: {
+    label: 'STANDARD',
+    desc: 'Balanced arcade pacing & classic skill challenge.',
+    enemyBulletSpeedMul: 0.84,
+    enemyCooldownMul: 1.18,
+    enemyHpMul: 0.88,
+    bossHpMul: 0.88,
+    focusBonusSec: 0,
+    scoreMul: 1.0,
+  },
+  overdrive: {
+    label: 'OVERDRIVE',
+    desc: 'Faster bullets, tougher bosses, 1.3x Score multiplier.',
+    enemyBulletSpeedMul: 1.1,
+    enemyCooldownMul: 0.88,
+    enemyHpMul: 1.15,
+    bossHpMul: 1.2,
+    focusBonusSec: 0,
+    scoreMul: 1.3,
+  },
 } as const;
 
 export const OVERHEAT = {
@@ -139,4 +195,6 @@ export const STORAGE_KEYS = {
   BEST_ROOM: 'ricochet_zero_best_room_v1',
   MUTED: 'ricochet_zero_muted_v1',
   TUTORIAL_DONE: 'ricochet_zero_tutorial_done_v1',
+  SETTINGS: 'ricochet_zero_settings_v1',
+  RECORDS: 'ricochet_zero_records_v1',
 } as const;

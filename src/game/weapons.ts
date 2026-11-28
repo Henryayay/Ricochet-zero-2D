@@ -1,4 +1,4 @@
-import { ARENA, COLORS, COMBAT } from './constants';
+import { ARENA, COLORS, COMBAT, RARITY_META } from './constants';
 import {
   allocEntityId,
   ArcEffect,
@@ -37,7 +37,7 @@ export const WEAPON_META: Record<
     name: 'Recoil Shotgun',
     short: 'SHOT',
     color: COLORS.charge2,
-    desc: 'Wide pellet blast forward; kicks you sharply backward.',
+    desc: 'Kinetic buckshot that wall-slams foes & dashes you back armored.',
   },
   sawblade: {
     name: 'Ricochet Sawblade',
@@ -155,6 +155,17 @@ function getModRank(player: PlayerState, modId: WeaponModId): number {
   return clamp(player.weaponMods?.[modId] ?? 0, 0, COMBAT.MAX_WEAPON_MOD_RANK);
 }
 
+function getModPotency(player: PlayerState, modId: WeaponModId): number {
+  const rank = getModRank(player, modId);
+  if (rank <= 0) return 0;
+  const rarity = player.weaponModRarities?.[modId] ?? 'common';
+  return rank * RARITY_META[rarity].multiplier;
+}
+
+function getOrdnanceBonus(player: PlayerState): number {
+  return Math.floor((player.perks?.ordnance_caliber ?? 0) * 0.5);
+}
+
 function rotateVec(dx: number, dy: number, angleRad: number): Vec2 {
   if (angleRad === 0) return { x: dx, y: dy };
   const c = Math.cos(angleRad);
@@ -241,13 +252,13 @@ function fireRailgun(
 ): void {
   const { player } = ctx;
   const beamsRank = getModRank(player, 'rail_beams');
-  const widthRank = getModRank(player, 'rail_width');
+  const widthPotency = getModPotency(player, 'rail_width');
   const bounceRank = getModRank(player, 'rail_bounce');
 
   const beamOffsets = getSpreadOffsetsDeg(beamsRank, 3.5, 3.5);
-  const width = 2 + tier * 1.5 + widthRank * 2;
+  const width = 2 + tier * 1.5 + widthPotency * 1.8;
   const bonus = Math.max(0, ctx.bonusDamage ?? 0);
-  const dmg = 2 + tier * 2 + widthRank + bonus;
+  const dmg = 2 + tier * 2 + Math.round(widthPotency) + getOrdnanceBonus(player) + bonus;
   const repeatHitDmg = Math.max(1, Math.floor(dmg * 0.4));
   const hitstop =
     tier >= 2 ? COMBAT.HITSTOP_HEAVY_SEC : COMBAT.HITSTOP_LIGHT_SEC;
@@ -373,23 +384,25 @@ function fireShotgun(
   const { player } = ctx;
   const pelletsRank = getModRank(player, 'shot_pellets');
   const shotBounceRank = getModRank(player, 'shot_bounce');
-  const caliberRank = getModRank(player, 'shot_caliber');
+  const caliberPotency = getModPotency(player, 'shot_caliber');
 
-  const pelletCount = 4 + tier + pelletsRank * 2;
-  const totalSpread = ((26 - pelletsRank * 4) * Math.PI) / 180;
+  const pelletCount = 5 + tier + pelletsRank * 2;
+  const totalSpread = ((22 - pelletsRank * 4) * Math.PI) / 180;
   const baseAngle = Math.atan2(dy, dx);
-  const bonus = Math.max(0, ctx.bonusDamage ?? 0);
-  const dmg = 1 + (tier >= 3 ? 1 : 0) + caliberRank;
+  const ordnanceBonus = getOrdnanceBonus(player);
+  const bonus = Math.max(0, ctx.bonusDamage ?? 0) + (ordnanceBonus - Math.floor(ordnanceBonus * 0.5));
+  const dmg = 1 + (tier >= 2 ? 1 : 0) + Math.round(caliberPotency) + Math.floor(ordnanceBonus * 0.5);
   const centerPelletIdx = Math.floor(pelletCount / 2);
-  const knockback = 185 + tier * 30 + caliberRank * 45;
-  const speed = 390;
-  const life = 0.25 + shotBounceRank * 0.14;
+  const knockback = 250 + tier * 35 + caliberPotency * 45;
+  const speed = 460;
+  const life = 0.36 + shotBounceRank * 0.16;
+  const piercesLeft = tier >= 2 ? 1 : 0;
   const color = COLORS.playerBullet;
   const spawnOffset = player.radius + 3;
 
   for (let i = 0; i < pelletCount; i++) {
     const t = pelletCount === 1 ? 0.5 : i / (pelletCount - 1);
-    const jitter = (Math.random() - 0.5) * 0.06;
+    const jitter = (Math.random() - 0.5) * 0.04;
     const angle = baseAngle + (t - 0.5) * totalSpread + jitter;
     const vx = Math.cos(angle) * speed;
     const vy = Math.sin(angle) * speed;
@@ -401,21 +414,54 @@ function fireShotgun(
       y: player.y + Math.sin(angle) * spawnOffset,
       vx,
       vy,
-      radius: 2.5,
+      radius: i === centerPelletIdx ? 3 : 2.5,
       damage: dmg + (i === centerPelletIdx ? bonus : 0),
       life,
+      maxLife: life,
       color,
       knockback,
       fromCharge: tier >= 1,
       bouncesLeft: shotBounceRank,
       bouncesDone: 0,
+      piercesLeft,
+      hitEnemyIds: [],
+      slamTimerSec: 0.65,
+      pointBlankBonus: 1,
+      pointBlankWindowSec: 0.13,
     });
   }
 
-  // Built-in backward recoil escape
-  const recoilSpeed = 210 + tier * 45;
+  // Stylish muzzle cone flash beams + forward kinetic shock ring
+  const coneAngles = [-totalSpread * 0.6, 0, totalSpread * 0.6];
+  for (let c = 0; c < coneAngles.length; c++) {
+    const coneDir = rotateVec(dx, dy, coneAngles[c]);
+    const flashLen = c === 1 ? 34 + tier * 6 : 26 + tier * 4;
+    ctx.beams.push({
+      x1: player.x + coneDir.x * (player.radius + 1),
+      y1: player.y + coneDir.y * (player.radius + 1),
+      x2: player.x + coneDir.x * (player.radius + flashLen),
+      y2: player.y + coneDir.y * (player.radius + flashLen),
+      width: c === 1 ? 4 + tier : 2.5,
+      color: c === 1 ? COLORS.charge2 : color,
+      life: 0.09,
+      maxLife: 0.09,
+    });
+  }
+  ctx.rings.push({
+    x: player.x + dx * (player.radius + 10),
+    y: player.y + dy * (player.radius + 10),
+    radius: 4,
+    maxRadius: 24 + tier * 5,
+    color: COLORS.charge2,
+    life: 0.14,
+    maxLife: 0.14,
+  });
+
+  // Built-in armored backward recoil escape dash
+  const recoilSpeed = 245 + tier * 42;
   player.vx = -dx * recoilSpeed;
   player.vy = -dy * recoilSpeed;
+  player.armored = true;
 
   spawnSparks(
     ctx.particles,
@@ -424,12 +470,12 @@ function fireShotgun(
     dx,
     dy,
     color,
-    8 + tier * 2,
-    80,
-    210,
+    12 + tier * 2,
+    100,
+    240,
     totalSpread * 1.15,
   );
-  ctx.onShake(-dx, -dy, 2.5 + tier * 1.1);
+  ctx.onShake(-dx, -dy, 3.0 + tier * 1.2);
 }
 
 function fireSawblade(
@@ -441,14 +487,14 @@ function fireSawblade(
   const { player } = ctx;
   const countRank = getModRank(player, 'saw_count');
   const bounceRank = getModRank(player, 'saw_bounce');
-  const sizeRank = getModRank(player, 'saw_size');
+  const sizePotency = getModPotency(player, 'saw_size');
 
   const bladeOffsets = getSpreadOffsetsDeg(countRank, 8, 8);
   const speed = (340 + tier * 30) * (1 + bounceRank * 0.12);
   const bouncesLeft = 2 + tier + bounceRank;
   const bonus = Math.max(0, ctx.bonusDamage ?? 0);
-  const baseDamage = 2 + tier + sizeRank;
-  const radius = 7 + (tier >= 2 ? 1 : 0) + sizeRank * 2;
+  const baseDamage = 2 + tier + Math.round(sizePotency) + getOrdnanceBonus(player);
+  const radius = 7 + (tier >= 2 ? 1 : 0) + Math.min(5, Math.round(sizePotency * 1.6));
   const color = COLORS.playerBullet;
 
   for (let i = 0; i < bladeOffsets.length; i++) {
@@ -561,14 +607,15 @@ function fireArcCoil(
   const { player } = ctx;
   const jumpsRank = getModRank(player, 'arc_jumps');
   const forkRank = getModRank(player, 'arc_fork');
-  const overloadRank = getModRank(player, 'arc_overload');
+  const overloadPotency = getModPotency(player, 'arc_overload');
 
-  const range = 104 + tier * 18 + overloadRank * 18;
+  const range = 104 + tier * 18 + Math.round(overloadPotency * 16);
   const chainRange = 105 + jumpsRank * 18;
   const maxJumps = 2 + tier + jumpsRank;
   const bonus = Math.max(0, ctx.bonusDamage ?? 0);
-  const primaryDmg = 2 + tier + overloadRank + bonus;
-  const chainDmg = 1 + tier + overloadRank;
+  const ordnanceBonus = getOrdnanceBonus(player);
+  const primaryDmg = 2 + tier + Math.round(overloadPotency) + ordnanceBonus + bonus;
+  const chainDmg = 1 + tier + Math.round(overloadPotency) + Math.floor(ordnanceBonus * 0.5);
   const forkCount = 1 + forkRank;
   const color = COLORS.playerBullet;
 
