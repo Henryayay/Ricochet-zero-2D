@@ -102,7 +102,7 @@ export function spawnTutorialStage(stageIndex: number): TutorialSpawnResult {
       };
     default:
       return {
-        title: 'DRILL 3/3: 0.2x SLOW-MO DODGE',
+        title: 'DRILL 3/3: 0.12x SLOW-MO DODGE',
         roomName: 'TUTORIAL 3/3',
         enemies: [makeTutorialDrone(135, 130)],
         hazards: [],
@@ -211,20 +211,20 @@ export function buildTutorialRenderState(params: {
       if (droneBarrierActive) {
         stepBadge = slowMoDuringBullets ? 'WEAVE GAP!' : 'BARRIER UP';
         if (slowMoActive && hasEnemyBullets) {
-          promptLine1 = '0.2x SLOW-MO! THREAD THE GAP!';
+          promptLine1 = '0.12x SLOW-MO! THREAD THE GAP!';
         } else if (hasEnemyBullets && !slowMoDuringBullets) {
-          promptLine1 = 'HOLD DRAG NOW FOR 0.2x SLOW-MO!';
+          promptLine1 = 'HOLD DRAG NOW FOR 0.12x SLOW-MO!';
         } else if (slowMoDuringBullets) {
           promptLine1 = 'LAUNCH THROUGH THE GAP!';
         } else {
-          promptLine1 = 'WAIT FOR RED WAVE, THEN 0.2x DODGE';
+          promptLine1 = 'WAIT FOR RED WAVE, THEN 0.12x DODGE';
         }
         promptLine2 = 'RED PIERCES ARMOR — DODGE FIRST!';
       }
 
       const worldHintText =
         droneBarrierActive && hasEnemyBullets && !slowMoActive && !slowMoDuringBullets
-          ? 'HOLD DRAG: 0.2X!'
+          ? 'HOLD DRAG: 0.12X!'
           : !droneBarrierActive && isIdle && !isDragging
             ? 'FINISH DRONE!'
             : undefined;
@@ -233,16 +233,16 @@ export function buildTutorialRenderState(params: {
         active: true,
         stageIndex: 2,
         stageCount: TUTORIAL_STAGE_COUNT,
-        title: 'DRILL 3/3: 0.2x SLOW-MO DODGE',
+        title: 'DRILL 3/3: 0.12x SLOW-MO DODGE',
         promptLine1,
         promptLine2,
         stepBadge,
         briefVisible,
-        briefTag: '0.2x FOCUS',
+        briefTag: '0.12x FOCUS',
         briefTagKind: 'red',
-        briefHeadline: 'DODGE RED IN 0.2x SLOW-MO',
+        briefHeadline: 'DODGE RED IN 0.12x SLOW-MO',
         briefSubtext:
-          'Drone barrier blocks attacks! When red bullets fly, HOLD DRAG to slow time to 0.2x and weave through the gap—then destroy it.',
+          'Drone barrier blocks attacks! When red bullets fly, HOLD DRAG to slow time to 0.12x and weave through the gap—then destroy it.',
         droneBarrierActive,
         worldHintText,
         cueKind: 'slowmo_dodge',

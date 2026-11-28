@@ -158,30 +158,30 @@ describe('Ricochet Zero Core Systems', () => {
   });
 
   describe('3. One-Thumb Input State Machine (GameEngine)', () => {
-    it('activates slowMoActive on drag > 10px, expires after 1.2s real time, and launches on release', () => {
+    it('activates slowMoActive on drag > 6px, expires after 2.5s real time, and launches on release', () => {
       const engine = new GameEngine();
       engine.startNewRun('railgun');
 
       engine.handlePointerDown(135, 300, 1, 1000);
       expect(engine.getRenderState().aim.slowMoActive).toBe(false);
 
-      // Drag > 10px downward -> Focus Ring activates
+      // Drag > 6px downward -> Focus Ring activates
       engine.handlePointerMove(135, 340, 1);
       let aim = engine.getRenderState().aim;
       expect(aim.active).toBe(true);
       expect(aim.slowMoActive).toBe(true);
       expect(aim.focusRemainingRatio).toBeCloseTo(1, 5);
 
-      // While slowMoActive is true, simulation runs at AIM_TIME_SCALE (0.2x)
+      // While slowMoActive is true (outside ramp-out), simulation runs at AIM_TIME_SCALE (0.12x)
       const beforeSlowTimer = engine.roomTimer;
       for (let i = 0; i < 10; i++) {
-        engine.update(0.05); // 0.5s real time -> 0.1s sim time
+        engine.update(0.05); // 0.5s real time -> 0.06s sim time
       }
       expect(engine.roomTimer - beforeSlowTimer).toBeCloseTo(0.5 * CONTROLS.AIM_TIME_SCALE, 2);
       expect(engine.getRenderState().aim.slowMoActive).toBe(true);
 
-      // Advance remaining 0.7s real time to hit 1.2s total
-      for (let i = 0; i < 14; i++) {
+      // Advance remaining 2.05s real time to clear 2.5s total without FP edge drift
+      for (let i = 0; i < 41; i++) {
         engine.update(0.05);
       }
       aim = engine.getRenderState().aim;
@@ -428,16 +428,17 @@ describe('Ricochet Zero Core Systems', () => {
 
       triggerQuickTap(engine, 135, 300);
 
-      // 4 + tier = 5 pellets moving forward (-Y)
-      expect(engine.projectiles).toHaveLength(5);
+      // 5 + tier = 6 pellets moving forward (-Y)
+      expect(engine.projectiles).toHaveLength(6);
       for (const p of engine.projectiles) {
         expect(p.fromPlayer).toBe(true);
         expect(p.vy).toBeLessThan(0);
       }
 
-      // Backward recoil (+Y) with speed = 210 + 1*45 = 255
+      // Armored backward recoil (+Y) with speed = 245 + 1*42 = 287
+      expect(engine.player.armored).toBe(true);
       expect(engine.player.vx).toBeCloseTo(0, 4);
-      expect(engine.player.vy).toBeCloseTo(255, 4);
+      expect(engine.player.vy).toBeCloseTo(287, 4);
     });
 
     it('sawblade spawns a bouncing sawblade with 2 + chargeTier bounces', () => {
@@ -1009,7 +1010,7 @@ describe('Ricochet Zero Core Systems', () => {
       engine.player.chargeTier = 0;
 
       triggerQuickTap(engine, 135, 260, 1, 1000, 50);
-      expect(engine.projectiles).toHaveLength(4);
+      expect(engine.projectiles).toHaveLength(5);
       const baseDmg = engine.projectiles[0].damage;
       expect(baseDmg).toBe(1);
       expect(engine.projectiles.every((pr) => pr.color === COLORS.playerBullet)).toBe(true);
@@ -1028,7 +1029,7 @@ describe('Ricochet Zero Core Systems', () => {
       engine.player.chargeTier = 0;
 
       triggerQuickTap(engine, 135, 260, 2, 1200, 50);
-      expect(engine.projectiles).toHaveLength(6);
+      expect(engine.projectiles).toHaveLength(7);
       expect(engine.projectiles[0].damage).toBeGreaterThan(baseDmg);
       expect(engine.projectiles[0].damage).toBe(2);
 
@@ -1196,16 +1197,16 @@ describe('Ricochet Zero Core Systems', () => {
       expect(20 - upgradedTargets[3].hp).toBe(0);
     });
 
-    it('enforces COMBAT.MAX_WEAPON_UPGRADES = 2 in generateDraftOptions', () => {
-      expect(COMBAT.MAX_WEAPON_UPGRADES).toBe(2);
+    it('enforces COMBAT.MAX_WEAPON_UPGRADES = 3 for new mods in generateDraftOptions', () => {
+      expect(COMBAT.MAX_WEAPON_UPGRADES).toBe(3);
       const engine = new GameEngine();
       engine.startNewRun('railgun');
-      engine.player.weaponUpgradeBudget = 2;
+      engine.player.weaponUpgradeBudget = 3;
 
       for (let i = 0; i < 20; i++) {
         const options = generateDraftOptions(engine.player, 2);
         expect(options).toHaveLength(3);
-        expect(options.some((opt) => opt.kind === 'weapon_mod')).toBe(false);
+        expect(options.some((opt) => opt.kind === 'weapon_mod' && !opt.isRarityUpgrade)).toBe(false);
       }
     });
 
@@ -1652,7 +1653,7 @@ describe('Ricochet Zero Core Systems', () => {
         }
       };
 
-      // Phase 1, Pattern 1: Aimed 5-Way Fan
+      // Phase 1, Pattern 1: Aimed 5-Way Fan (Room 5 softer 0.7s telegraph)
       boss.hp = boss.maxHp;
       boss.bossPhase = 0;
       boss.bossPattern = 0;
@@ -1660,7 +1661,7 @@ describe('Ricochet Zero Core Systems', () => {
       stepFor(0.02); // enters telegraph for Pattern 1
       expect(boss.bossPhase).toBe(1);
       expect(boss.bossPattern).toBe(1);
-      stepFor(0.61); // fires 5-way fan
+      stepFor(0.71); // fires 5-way fan
       expect(engine.projectiles.filter((pr) => !pr.fromPlayer)).toHaveLength(5);
 
       // Phase 1, Pattern 0: Double Spiral (2 radial bursts of 10 in Room 5)
@@ -1671,7 +1672,7 @@ describe('Ricochet Zero Core Systems', () => {
       stepFor(0.02); // enters telegraph for Pattern 0
       expect(boss.bossPhase).toBe(1);
       expect(boss.bossPattern).toBe(0);
-      stepFor(0.61); // fires 1st radial ring + queues 2nd burst
+      stepFor(0.71); // fires 1st radial ring + queues 2nd burst
       expect(engine.projectiles.filter((pr) => !pr.fromPlayer)).toHaveLength(10);
       expect(boss.burstRemaining).toBe(1);
       stepFor(0.35); // fires 2nd radial ring
@@ -1688,7 +1689,7 @@ describe('Ricochet Zero Core Systems', () => {
       stepFor(0.02); // enters telegraph for Pattern 2 (patternCount = 3)
       expect(boss.bossPhase).toBe(1);
       expect(boss.bossPattern).toBe(2);
-      stepFor(0.51); // fires Cross-Ring (10 bullets) + queues 2 aimed bursts
+      stepFor(0.59); // fires Cross-Ring (10 bullets) + queues 2 aimed bursts
       expect(engine.projectiles.filter((pr) => !pr.fromPlayer)).toHaveLength(10);
       expect(boss.burstRemaining).toBe(2);
       stepFor(0.34); // fires 2 aimed follow-up shots (total 12 bullets)
@@ -2153,11 +2154,11 @@ describe('Ricochet Zero Core Systems', () => {
       expect(transferEngine.score).toBe(scoreDuringTransfer);
       expect(transferEngine.roomNumber).toBe(roomDuringTransfer);
 
-      // Across 40 calls to generateDraftOptions (weaponUpgradeBudget = 2, fresh perks),
+      // Across 40 calls to generateDraftOptions (weaponUpgradeBudget = 3, fresh perks),
       // weapon swaps appear occasionally (0 < count < 40) and multiple player-property perks appear
       const varietyEngine = new GameEngine();
       varietyEngine.startNewRun('railgun');
-      varietyEngine.player.weaponUpgradeBudget = 2;
+      varietyEngine.player.weaponUpgradeBudget = COMBAT.MAX_WEAPON_UPGRADES;
 
       let weaponSwapDraftCount = 0;
       const seenPerks = new Set<PerkId>();
@@ -2513,6 +2514,234 @@ describe('Ricochet Zero Core Systems', () => {
       expect(fromDropIn.phase).toBe('playing');
       expect(fromDropIn.roomNumber).toBe(1);
       expect(fromDropIn.player.weapon).toBe('sawblade');
+    });
+  });
+
+  describe('13. Rarity System, Endgame Mastery, Progressive Bosses, 0.12x Slow-Mo & Settings', () => {
+    it('enforces HP/Shield/preview_bounce/multi-shot caps and offers Mastery + Rarity upgrades past Room 30', () => {
+      const engine = new GameEngine();
+      engine.startNewRun('railgun');
+      engine.player.maxHp = COMBAT.HARD_MAX_HP;
+      engine.player.hp = COMBAT.HARD_MAX_HP;
+      engine.player.maxShield = COMBAT.HARD_MAX_SHIELD;
+      engine.player.shield = COMBAT.HARD_MAX_SHIELD;
+      engine.player.weaponUpgradeBudget = COMBAT.MAX_WEAPON_UPGRADES;
+      engine.player.weaponMods.rail_beams = 1;
+      engine.player.weaponMods.rail_bounce = 1;
+      engine.player.weaponMods.rail_width = 1;
+      engine.player.perks.preview_bounce = 1;
+      engine.player.perks.explosive_slam = 2;
+      engine.player.perks.longer_focus = 2;
+
+      // Max all non-mastery perks
+      for (const key of Object.keys(engine.player.perks) as PerkId[]) {
+        if (!['kinetic_mastery', 'ordnance_caliber', 'velocity_tuning', 'overclock_score'].includes(key)) {
+          engine.player.perks[key] = 99;
+        }
+      }
+
+      for (let i = 0; i < 30; i++) {
+        const opts = generateDraftOptions(engine.player, 35, 3.0);
+        expect(opts).toHaveLength(3);
+        expect(opts.some((o) => o.perkId === 'preview_bounce')).toBe(false);
+        expect(opts.some((o) => o.perkId === 'max_shield')).toBe(false);
+        expect(opts.some((o) => o.perkId === 'vital_core')).toBe(false);
+        // Never falls back to 3 weapon swaps
+        expect(opts.filter((o) => o.kind === 'weapon').length).toBeLessThan(3);
+        // Multi-shot / bounce mods are never offered as rarity upgrades
+        expect(opts.some((o) => o.weaponModId === 'rail_beams' || o.weaponModId === 'rail_bounce')).toBe(false);
+      }
+    });
+
+    it('applies rarity upgrades without consuming weaponUpgradeBudget and scales scalable perk potency', () => {
+      const engine = new GameEngine();
+      engine.startNewRun('railgun');
+      engine.player.weaponUpgradeBudget = 1;
+      engine.player.weaponMods.rail_width = 1;
+      engine.player.perks.longer_focus = 1;
+
+      const baseFocus = engine.getRenderState().aim.focusRemainingRatio;
+      expect(baseFocus).toBe(1);
+
+      engine.phase = 'draft';
+      engine.selectDraftOption({
+        id: 'mod_up_rail_width',
+        kind: 'weapon_mod',
+        weaponId: 'railgun',
+        weaponModId: 'rail_width',
+        title: 'Overcharged Bore +',
+        description: 'Upgraded bore',
+        rarity: 'mythic',
+        previousRarity: 'common',
+        isRarityUpgrade: true,
+      });
+
+      expect(engine.player.weaponUpgradeBudget).toBe(1);
+      expect(engine.player.weaponModRarities?.rail_width).toBe('mythic');
+    });
+
+    it('smooths Room 5 -> 10 -> 15 -> 20 Boss curve and removes Sniper from Room 15 escorts', () => {
+      const rm5 = generateRoom(5, 'standard');
+      const boss5 = rm5.enemies.find((e) => e.kind === 'boss')!;
+      expect(boss5.hp).toBe(Math.round(16 * 0.88));
+      expect(rm5.enemies).toHaveLength(1);
+
+      const rm10 = generateRoom(10, 'standard');
+      const boss10 = rm10.enemies.find((e) => e.kind === 'boss')!;
+      expect(boss10.hp).toBe(Math.round(32 * 0.88));
+      expect(rm10.enemies).toHaveLength(2);
+      expect(rm10.hazards.some((h) => h.kind === 'barrel')).toBe(false);
+
+      const rm15 = generateRoom(15, 'standard');
+      const boss15 = rm15.enemies.find((e) => e.kind === 'boss')!;
+      expect(boss15.hp).toBe(Math.round(44 * 0.88));
+      expect(rm15.enemies).toHaveLength(3);
+      expect(rm15.enemies.some((e) => e.kind === 'sniper')).toBe(false);
+
+      const rm20 = generateRoom(20, 'standard');
+      const boss20 = rm20.enemies.find((e) => e.kind === 'boss')!;
+      expect(boss20.hp).toBeGreaterThan(boss15.hp * 1.5);
+      expect(rm20.enemies.some((e) => e.kind === 'sniper')).toBe(true);
+    });
+
+    it('activates 0.12x slow-mo on >=90ms hold without drag and smoothly ramps out near expiry', () => {
+      const engine = new GameEngine();
+      engine.startNewRun('railgun');
+
+      engine.handlePointerDown(135, 300, 1, 1000);
+      expect(engine.getRenderState().aim.slowMoActive).toBe(false);
+
+      // Hold without dragging past 90ms
+      engine.update(0.05);
+      expect(engine.getRenderState().aim.slowMoActive).toBe(false);
+      engine.update(0.05);
+      expect(engine.getRenderState().aim.slowMoActive).toBe(true);
+
+      // Verify time runs at 0.12x
+      const before = engine.roomTimer;
+      for (let i = 0; i < 10; i++) {
+        engine.update(0.05); // 0.5s real time -> ~0.06s sim time
+      }
+      expect(engine.roomTimer - before).toBeCloseTo(0.5 * CONTROLS.AIM_TIME_SCALE, 2);
+
+      // Advance into the final 0.25s ramp-out window (2.5s - 0.5s - 0.05s = 1.95s remaining; advance 1.85s -> 0.1s left)
+      for (let i = 0; i < 37; i++) {
+        engine.update(0.05);
+      }
+      expect(engine.getRenderState().aim.slowMoActive).toBe(true);
+      const beforeRamp = engine.roomTimer;
+      engine.update(0.05);
+      const rampDelta = engine.roomTimer - beforeRamp;
+      // During ramp-out, effective timeScale is strictly between AIM_TIME_SCALE (0.12) and 1.0
+      expect(rampDelta).toBeGreaterThan(0.05 * CONTROLS.AIM_TIME_SCALE);
+      expect(rampDelta).toBeLessThan(0.05);
+    });
+
+    it('persists settings, pauses cleanly, adjusts pull sensitivity, and separates difficulty records with 1.3x Overdrive score', () => {
+      const engine = new GameEngine();
+      engine.updateSettings({
+        bgmVolume: 0.4,
+        sfxVolume: 0.7,
+        pullSensitivityPx: 48,
+        screenShake: false,
+        difficulty: 'overdrive',
+      });
+
+      const s = engine.getSettings();
+      expect(s.bgmVolume).toBeCloseTo(0.4, 5);
+      expect(s.sfxVolume).toBeCloseTo(0.7, 5);
+      expect(s.pullSensitivityPx).toBe(48);
+      expect(s.screenShake).toBe(false);
+      expect(s.difficulty).toBe('overdrive');
+      expect(engine.audio.getBgmVolume()).toBeCloseTo(0.4, 5);
+      expect(engine.audio.getSfxVolume()).toBeCloseTo(0.7, 5);
+
+      engine.startNewRun('railgun');
+      // Difficulty cannot change mid-run
+      engine.updateSettings({ difficulty: 'chill' });
+      expect(engine.getSettings().difficulty).toBe('overdrive');
+
+      // Pause stops simulation progress
+      engine.setPaused(true);
+      const frozenTime = engine.roomTimer;
+      engine.update(0.2);
+      expect(engine.roomTimer).toBe(frozenTime);
+      engine.setPaused(false);
+
+      // Pull sensitivity of 48px reaches full launch speed at 48px pull
+      engine.handlePointerDown(135, 300, 2, 1000);
+      engine.handlePointerMove(135, 348, 2);
+      engine.handlePointerUp(135, 348, 2, 1100);
+      expect(len(engine.player.vx, engine.player.vy)).toBeCloseTo(PHYSICS.MAX_LAUNCH_SPEED, 2);
+
+      // Overdrive grants 1.3x score on draft skip
+      engine.phase = 'draft';
+      engine.flowMultiplier = 1.0;
+      engine.score = 0;
+      engine.skipDraft();
+      expect(engine.score).toBe(Math.round(COMBAT.SKIP_DRAFT_BASE_BONUS * 1.3));
+    });
+
+    it('Shotgun triggers Wall Slams, point-blank bonus damage, and 2x+ Charge piercing', () => {
+      const engine = new GameEngine();
+      engine.startNewRun('shotgun');
+      engine.hazards = [];
+
+      // Place a tough enemy near the top wall and another behind it for piercing test
+      const frontEnemy: Enemy = {
+        id: 9901,
+        kind: 'slime',
+        x: 135,
+        y: 80,
+        vx: 0,
+        vy: 0,
+        radius: 10,
+        hp: 20,
+        maxHp: 20,
+        hitFlash: 0,
+        slammedTimer: 0,
+        angle: 0,
+        stateTimer: 10,
+      };
+      const rearEnemy: Enemy = {
+        id: 9902,
+        kind: 'slime',
+        x: 135,
+        y: 54,
+        vx: 0,
+        vy: 0,
+        radius: 10,
+        hp: 20,
+        maxHp: 20,
+        hitFlash: 0,
+        slammedTimer: 0,
+        angle: 0,
+        stateTimer: 10,
+      };
+      engine.enemies = [frontEnemy, rearEnemy];
+
+      // Fire point-blank at 2x Charge from y=106 upward (-Y)
+      engine.player.x = 135;
+      engine.player.y = 106;
+      engine.player.vx = 0;
+      engine.player.vy = -260;
+      engine.player.aimDirX = 0;
+      engine.player.aimDirY = -1;
+      engine.player.armored = true;
+      engine.player.chargeTier = 2;
+
+      triggerQuickTap(engine, 135, 106);
+      expect(engine.player.armored).toBe(true);
+      expect(engine.beams.length).toBe(3);
+
+      // Step simulation: pellets hit frontEnemy (point-blank + slamTimer), pierce to rearEnemy, and slam into top wall
+      for (let i = 0; i < 40; i++) {
+        engine.stepSimulation(PHYSICS.FIXED_DT);
+      }
+
+      // Both enemies took heavy damage (frontEnemy point-blank + wall slam; rearEnemy pierced)
+      expect(frontEnemy.hp).toBeLessThan(12);
+      expect(rearEnemy.hp).toBeLessThan(20);
     });
   });
 });

@@ -281,8 +281,11 @@ export class AudioEngine {
   private masterGain: GainNode | null = null;
   private masterFilter: BiquadFilterNode | null = null;
   private bgmGain: GainNode | null = null;
+  private sfxGain: GainNode | null = null;
   private noiseBuffer: AudioBuffer | null = null;
   private muted = false;
+  private bgmVolume = 1.0;
+  private sfxVolume = 1.0;
 
   private bgmPlaying = false;
   private bgmPaused = false;
@@ -315,9 +318,13 @@ export class AudioEngine {
       gain.gain.setValueAtTime(this.muted ? 0 : MASTER_GAIN, ctx.currentTime);
 
       const bgm = ctx.createGain();
-      bgm.gain.setValueAtTime(BGM_GAIN, ctx.currentTime);
+      bgm.gain.setValueAtTime(BGM_GAIN * this.bgmVolume, ctx.currentTime);
+
+      const sfx = ctx.createGain();
+      sfx.gain.setValueAtTime(this.sfxVolume, ctx.currentTime);
 
       bgm.connect(filter);
+      sfx.connect(filter);
       filter.connect(gain);
       gain.connect(ctx.destination);
 
@@ -325,6 +332,7 @@ export class AudioEngine {
       this.masterFilter = filter;
       this.masterGain = gain;
       this.bgmGain = bgm;
+      this.sfxGain = sfx;
       this.noiseBuffer = this.createNoiseBuffer(ctx, 1.0);
 
       if (ctx.state === 'suspended') {
@@ -339,6 +347,7 @@ export class AudioEngine {
       this.masterFilter = null;
       this.masterGain = null;
       this.bgmGain = null;
+      this.sfxGain = null;
       this.noiseBuffer = null;
       return false;
     }
@@ -355,6 +364,32 @@ export class AudioEngine {
 
   isMuted(): boolean {
     return this.muted;
+  }
+
+  setBgmVolume(vol: number): void {
+    this.bgmVolume = Math.max(0, Math.min(1, vol));
+    if (this.ctx && this.bgmGain) {
+      const now = this.ctx.currentTime;
+      this.bgmGain.gain.cancelScheduledValues(now);
+      this.bgmGain.gain.setTargetAtTime(BGM_GAIN * this.bgmVolume, now, 0.02);
+    }
+  }
+
+  getBgmVolume(): number {
+    return this.bgmVolume;
+  }
+
+  setSfxVolume(vol: number): void {
+    this.sfxVolume = Math.max(0, Math.min(1, vol));
+    if (this.ctx && this.sfxGain) {
+      const now = this.ctx.currentTime;
+      this.sfxGain.gain.cancelScheduledValues(now);
+      this.sfxGain.gain.setTargetAtTime(this.sfxVolume, now, 0.02);
+    }
+  }
+
+  getSfxVolume(): number {
+    return this.sfxVolume;
   }
 
   /** Start the procedural retro synthwave background groove (requires user gesture init first). */
@@ -1306,7 +1341,7 @@ export class AudioEngine {
     if (this.ctx.state === 'suspended') {
       void this.ctx.resume().catch(() => {});
     }
-    return { ctx: this.ctx, dest: this.masterFilter };
+    return { ctx: this.ctx, dest: this.sfxGain ?? this.masterFilter };
   }
 
   private playTone(

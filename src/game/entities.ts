@@ -1,4 +1,22 @@
+import { DIFFICULTY_ORDER, RARITY_ORDER } from './constants';
+
 export type WeaponId = 'railgun' | 'shotgun' | 'sawblade' | 'arccoil';
+
+export type RarityId = (typeof RARITY_ORDER)[number];
+export type DifficultyId = (typeof DIFFICULTY_ORDER)[number];
+
+export interface GameSettings {
+  bgmVolume: number;
+  sfxVolume: number;
+  pullSensitivityPx: number;
+  screenShake: boolean;
+  difficulty: DifficultyId;
+}
+
+export interface DifficultyRecord {
+  bestScore: number;
+  bestRoom: number;
+}
 
 export type WeaponModId =
   | 'rail_beams'
@@ -28,7 +46,14 @@ export type PerkId =
   | 'momentum_edge'
   | 'flow_surge'
   | 'vital_core'
-  | 'field_repair';
+  | 'field_repair'
+  | 'ricochet_crit'
+  | 'perfect_brake'
+  | 'focus_kill_refund'
+  | 'kinetic_mastery'
+  | 'ordnance_caliber'
+  | 'velocity_tuning'
+  | 'overclock_score';
 
 export type EnemyKind = 'slime' | 'spike_slime' | 'sniper' | 'bomb_bot' | 'drone' | 'boss';
 
@@ -66,9 +91,11 @@ export interface PlayerState {
   armored: boolean;
   weapon: WeaponId;
   weaponMods: Record<WeaponModId, number>;
+  weaponModRarities?: Record<WeaponModId, RarityId>;
   /** Total weapon upgrade points earned across the run (capped at COMBAT.MAX_WEAPON_UPGRADES) */
   weaponUpgradeBudget: number;
   perks: Record<PerkId, number>;
+  perkRarities?: Record<PerkId, RarityId>;
   trail: TrailPoint[];
   flashTimer: number;
 }
@@ -97,6 +124,7 @@ export interface Enemy {
   bossPhase?: number;
   bossBurstCount?: number;
   bossPattern?: number;
+  bossTier?: number;
   canShoot?: boolean;
   fireTimer?: number;
   burstRemaining?: number;
@@ -128,11 +156,17 @@ export interface Projectile {
   radius: number;
   damage: number;
   life: number;
+  maxLife?: number;
   color: string;
   knockback?: number;
   fromCharge?: boolean;
   bouncesLeft?: number;
   bouncesDone?: number;
+  piercesLeft?: number;
+  hitEnemyIds?: number[];
+  slamTimerSec?: number;
+  pointBlankBonus?: number;
+  pointBlankWindowSec?: number;
 }
 
 export interface Sawblade {
@@ -209,6 +243,10 @@ export interface DraftOption {
   title: string;
   description: string;
   rankLabel?: string;
+  rarity?: RarityId;
+  previousRarity?: RarityId;
+  isRarityUpgrade?: boolean;
+  isMastery?: boolean;
 }
 
 export function createInitialPerks(): Record<PerkId, number> {
@@ -227,6 +265,39 @@ export function createInitialPerks(): Record<PerkId, number> {
     flow_surge: 0,
     vital_core: 0,
     field_repair: 0,
+    ricochet_crit: 0,
+    perfect_brake: 0,
+    focus_kill_refund: 0,
+    kinetic_mastery: 0,
+    ordnance_caliber: 0,
+    velocity_tuning: 0,
+    overclock_score: 0,
+  };
+}
+
+export function createInitialPerkRarities(): Record<PerkId, RarityId> {
+  return {
+    preview_bounce: 'common',
+    explosive_slam: 'common',
+    brake_shockwave: 'common',
+    longer_focus: 'common',
+    max_shield: 'common',
+    bounce_speed: 'common',
+    air_drag_tune: 'common',
+    heavy_ram: 'common',
+    quick_charge: 'common',
+    overheat_vent: 'common',
+    momentum_edge: 'common',
+    flow_surge: 'common',
+    vital_core: 'common',
+    field_repair: 'common',
+    ricochet_crit: 'common',
+    perfect_brake: 'common',
+    focus_kill_refund: 'common',
+    kinetic_mastery: 'common',
+    ordnance_caliber: 'common',
+    velocity_tuning: 'common',
+    overclock_score: 'common',
   };
 }
 
@@ -244,6 +315,23 @@ export function createInitialWeaponMods(): Record<WeaponModId, number> {
     arc_jumps: 0,
     arc_fork: 0,
     arc_overload: 0,
+  };
+}
+
+export function createInitialWeaponModRarities(): Record<WeaponModId, RarityId> {
+  return {
+    rail_beams: 'common',
+    rail_width: 'common',
+    rail_bounce: 'common',
+    shot_pellets: 'common',
+    shot_bounce: 'common',
+    shot_caliber: 'common',
+    saw_count: 'common',
+    saw_bounce: 'common',
+    saw_size: 'common',
+    arc_jumps: 'common',
+    arc_fork: 'common',
+    arc_overload: 'common',
   };
 }
 
